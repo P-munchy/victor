@@ -13,7 +13,9 @@
 #include "engine/aiComponent/behaviorComponent/behaviors/devBehaviors/selfTest/behaviorSelfTestLookAtCharger.h"
 
 #include "engine/actions/basicActions.h"
+#include "engine/actions/visuallyVerifyActions.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/components/sensors/proxSensorComponent.h"
 #include "engine/components/visionComponent.h"
 #include "engine/factory/factoryTestLogger.h"
@@ -98,7 +100,7 @@ Result BehaviorSelfTestLookAtCharger::OnBehaviorActivatedInternal()
   TurnInPlaceAction* turn = new TurnInPlaceAction(_angleToTurn.ToFloat(), false);
 
   // After turning wait to process 10 images before trying to refine the turn
-  WaitForImagesAction* wait = new WaitForImagesAction(5, VisionMode::DetectingMarkers);
+  WaitForImagesAction* wait = new WaitForImagesAction(5, VisionMode::Markers);
   
   CompoundActionSequential* action = new CompoundActionSequential({liftHeadDrive, turn, wait});
   DelegateIfInControl(action, [this]() { TransitionToRefineTurn(); });
@@ -122,14 +124,15 @@ IBehaviorSelfTest::SelfTestStatus BehaviorSelfTestLookAtCharger::SelfTestUpdateI
   {
     --_numRecordedReadingsLeft;
     
-    const auto& proxData = robot.GetProxSensorComponent().GetLatestProxDataRaw();
+    const auto& proxData = robot.GetProxSensorComponent().GetLatestProxData();
     DistanceSensorData data;
-    data.proxSensorData = proxData;
+    data.proxDistanceToTarget_mm = proxData.distance_mm;
     data.visualDistanceToTarget_mm = 0;
     data.visualAngleAwayFromTarget_rad = 0;
     
     Pose3d markerPose;
-    const bool res = GetExpectedObjectMarkerPoseWrtRobot(markerPose);
+    ObjectID unused;
+    const bool res = GetExpectedObjectMarkerPoseWrtRobot(markerPose, unused);
     if(res)
     {
       data.visualDistanceToTarget_mm = markerPose.GetTranslation().x();
@@ -151,13 +154,13 @@ IBehaviorSelfTest::SelfTestStatus BehaviorSelfTestLookAtCharger::SelfTestUpdateI
       bias = 0;
     }
     
-    if(!Util::IsNear(data.proxSensorData.distance_mm - bias, 
+    if(!Util::IsNear(data.proxDistanceToTarget_mm - bias, 
                      data.visualDistanceToTarget_mm,
                      SelfTestConfig::kDistanceSensorReadingThresh_mm))
     {
       PRINT_NAMED_WARNING("BehaviorSelfTestLookAtCharger.SelfTestUpdateInternal.ReadingOutsideThresh",
-                          "Sensor reading %u - %f not near visual reading %f with threshold %f",
-                          data.proxSensorData.distance_mm,
+                          "Sensor reading %f - %f not near visual reading %f with threshold %f",
+                          data.proxDistanceToTarget_mm,
                           SelfTestConfig::kDistanceSensorBiasAdjustment_mm,
                           data.visualDistanceToTarget_mm,
                           SelfTestConfig::kDistanceSensorReadingThresh_mm);
@@ -191,11 +194,13 @@ void BehaviorSelfTestLookAtCharger::TransitionToRefineTurn()
   // be removed
   Robot& robot = GetBEI().GetRobotInfo()._robot;
 
-  auto action = std::make_unique<TurnInPlaceAction>(0, false);
+  CompoundActionSequential* action = new CompoundActionSequential();
+  TurnInPlaceAction* turn = new TurnInPlaceAction(0, false);
 
   // Get the pose of the marker we should be seeing
   Pose3d markerPose;
-  const bool res = GetExpectedObjectMarkerPoseWrtRobot(markerPose);
+  ObjectID objectID;
+  const bool res = GetExpectedObjectMarkerPoseWrtRobot(markerPose, objectID);
   if(res)
   {
     // Check that we are within expected distance to the marker
@@ -230,11 +235,19 @@ void BehaviorSelfTestLookAtCharger::TransitionToRefineTurn()
                      "Turning %f degrees to be perpendicular to marker",
                      angle.getDegrees());
     
-    action->SetRequestedTurnAngle(angle.ToFloat());
+    turn->SetRequestedTurnAngle(angle.ToFloat());
   }
+  action->AddAction(turn);
+
+  VisuallyVerifyObjectAction* verify = new VisuallyVerifyObjectAction(objectID);
+  verify->SetUseCyclingExposure();
+  action->AddAction(verify);
   
+  WaitForImagesAction* wait = new WaitForImagesAction(5, VisionMode::Markers);
+  action->AddAction(wait);
+
   // Once we are perpendicular to the marker, start recording distance sensor readings
-  DelegateIfInControl(action.release(), [this]() { TransitionToRecordSensor(); });
+  DelegateIfInControl(action, [this]() { TransitionToRecordSensor(); });
 }
 
 void BehaviorSelfTestLookAtCharger::TransitionToRecordSensor()
@@ -247,7 +260,8 @@ void BehaviorSelfTestLookAtCharger::TransitionToTurnBack()
   SELFTEST_SET_RESULT(SelfTestResultCode::SUCCESS);
 }
 
-bool BehaviorSelfTestLookAtCharger::GetExpectedObjectMarkerPoseWrtRobot(Pose3d& markerPoseWrtRobot)
+bool BehaviorSelfTestLookAtCharger::GetExpectedObjectMarkerPoseWrtRobot(Pose3d& markerPoseWrtRobot,
+                                                                        ObjectID& objectID)
 {
   // DEPRECATED - Grabbing robot to support current cozmo code, but this should
   // be removed
@@ -285,6 +299,8 @@ bool BehaviorSelfTestLookAtCharger::GetExpectedObjectMarkerPoseWrtRobot(Pose3d& 
       PRINT_NAMED_INFO("BehaviorSelfTestLookAtCharger.GetExpectedObjectMarkerPoseWrtRobot.NullObject","");
       return false;
     }
+
+    objectID = object->GetID();
 
     const auto& markers = object->GetMarkers();
     
@@ -335,6 +351,3 @@ bool BehaviorSelfTestLookAtCharger::GetExpectedObjectMarkerPoseWrtRobot(Pose3d& 
 
 }
 }
-
-
-

@@ -32,6 +32,7 @@ PRIVATE
   libev
 # platform
   ${PLATFORM_LIBS}
+  ${ASAN_LINKER_FLAGS}
 )
 
 anki_build_strip(TARGET cubeBleClient)
@@ -47,7 +48,6 @@ target_include_directories(cubeBleClient
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
   PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../robot/include>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../generated/clad/engine>
   ${PLATFORM_INCLUDES}
 )
 

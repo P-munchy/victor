@@ -17,6 +17,7 @@
 #include "engine/robot.h"
 #include "engine/components/battery/batteryComponent.h"
 #include "engine/components/carryingComponent.h"
+#include "engine/components/movementComponent.h"
 
 #include "osState/osState.h"
 
@@ -27,9 +28,9 @@ namespace Vector {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 BEIRobotInfo::~BEIRobotInfo()
 {
-  
+
 }
-  
+
 ActionList& BEIRobotInfo::GetActionList()
 {
   return _robot.GetComponent<ActionList>();
@@ -39,6 +40,12 @@ ActionList& BEIRobotInfo::GetActionList()
 BatteryLevel BEIRobotInfo::GetBatteryLevel() const
 {
   return _robot.GetBatteryComponent().GetBatteryLevel();
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+BatteryLevel BEIRobotInfo::GetPrevBatteryLevel() const
+{
+  return _robot.GetBatteryComponent().GetPrevBatteryLevel();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -52,7 +59,7 @@ CarryingComponent& BEIRobotInfo::GetCarryingComponent() const
 {
   return _robot.GetCarryingComponent();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsCarryingObject() const
 {
@@ -155,12 +162,6 @@ MovementComponent& BEIRobotInfo::GetMoveComponent() const
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-ObjectPoseConfirmer& BEIRobotInfo::GetObjectPoseConfirmer() const
-{
-  return _robot.GetObjectPoseConfirmer();
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 OffTreadsState BEIRobotInfo::GetOffTreadsState() const
 {
   return _robot.GetOffTreadsState();
@@ -182,6 +183,12 @@ PathComponent& BEIRobotInfo::GetPathComponent() const
 Radians BEIRobotInfo::GetPitchAngle() const
 {
   return _robot.GetPitchAngle();
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Radians BEIRobotInfo::GetRollAngle() const
+{
+  return _robot.GetRollAngle();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -249,19 +256,19 @@ IExternalInterface* BEIRobotInfo::GetExternalInterface()
 {
   return _robot.GetExternalInterface();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::HasGatewayInterface() const
 {
   return _robot.HasGatewayInterface();
 }
- 
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 uint32_t BEIRobotInfo::GetCpuTemperature_degC() const
 {
   return OSState::getInstance()->GetTemperature_C();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 IGatewayInterface* BEIRobotInfo::GetGatewayInterface()
 {
@@ -282,6 +289,18 @@ bool BEIRobotInfo::IsCharging() const
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+float BEIRobotInfo::GetTimeAtBatteryLevelSec(BatteryLevel level) const
+{
+  return _robot.GetBatteryComponent().GetTimeAtLevelSec(level);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+float BEIRobotInfo::GetOnChargerDurationSec() const
+{
+  return _robot.GetBatteryComponent().GetOnChargerDurationSec();
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsHeadCalibrated() const
 {
   return _robot.IsHeadCalibrated();
@@ -292,7 +311,7 @@ bool BEIRobotInfo::IsLiftCalibrated() const
 {
   return _robot.IsLiftCalibrated();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsHeadMotorOutOfBounds() const
 {
@@ -308,13 +327,13 @@ bool BEIRobotInfo::IsLiftMotorOutOfBounds() const
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsHeadEncoderInvalid() const
 {
-  return _robot.IsHeadEncoderInvalid();
+  return _robot.GetMoveComponent().IsHeadEncoderInvalid();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsLiftEncoderInvalid() const
 {
-  return _robot.IsLiftEncoderInvalid();
+  return _robot.GetMoveComponent().IsLiftEncoderInvalid();
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -354,6 +373,12 @@ bool BEIRobotInfo::IsBeingHeld() const
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+EngineTimeStamp_t BEIRobotInfo::GetBeingHeldLastChangedTime_ms() const
+{
+  return _robot.GetBeingHeldLastChangedTime_ms();
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 bool BEIRobotInfo::IsPoseInWorldOrigin(const Pose3d& pose) const
 {
   return _robot.IsPoseInWorldOrigin(pose);
@@ -376,19 +401,24 @@ Util::Data::DataPlatform* BEIRobotInfo::GetDataPlatform() const
 {
   return _robot.GetContextDataPlatform();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 NVStorageComponent& BEIRobotInfo::GetNVStorageComponent() const
 {
   return _robot.GetNVStorageComponent();
 }
-  
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 BatteryComponent& BEIRobotInfo::GetBatteryComponent() const
 {
   return _robot.GetBatteryComponent();
 }
 
-  
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+const LocaleComponent & BEIRobotInfo::GetLocaleComponent() const
+{
+  return _robot.GetLocaleComponent();
+}
+
 } // namespace Vector
 } // namespace Anki

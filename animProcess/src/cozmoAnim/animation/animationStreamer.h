@@ -13,32 +13,28 @@
  *
  **/
 
-#ifndef __Anki_Cozmo_AnimationStreamer_H__
-#define __Anki_Cozmo_AnimationStreamer_H__
+#ifndef __Anki_Vector_AnimationStreamer_H__
+#define __Anki_Vector_AnimationStreamer_H__
 
 #include "coretech/common/shared/types.h"
 #include "coretech/vision/engine/image.h"
-#include "coretech/vision/shared/compositeImage/compositeImageLayer.h"
 #include "cozmoAnim/animation/trackLayerComponent.h"
 #include "cozmoAnim/animTimeStamp.h"
 #include "cannedAnimLib/cannedAnims/animation.h"
 #include "cannedAnimLib/cannedAnims/animationMessageWrapper.h"
 #include "cannedAnimLib/baseTypes/track.h"
-#include "clad/types/keepFaceAliveParameters.h"
-
-#include <list>
-#include <memory>
 
 namespace Anki {
 namespace Vision{
-class CompositeImageBuilder;
 }
 
 namespace Vector {
 
   // Forward declaration
   class ProceduralFace;
-  class AnimContext;
+  namespace Anim {
+    class AnimContext;
+  }
   class TextToSpeechComponent;
   class TrackLayerComponent;
 
@@ -54,7 +50,7 @@ namespace Vector {
     struct RemoveSquint;
   }
 
-
+namespace Anim {
   class AnimationStreamer
   {
   public:
@@ -66,7 +62,7 @@ namespace Vector {
     // TODO: This could be removed in favor of just referring to ::Anki::Cozmo, but avoiding touching too much code now.
     static const Tag kNotAnimatingTag = ::Anki::Vector::kNotAnimatingTag;
 
-    AnimationStreamer(const AnimContext* context);
+    AnimationStreamer(const Anim::AnimContext* context);
 
     ~AnimationStreamer();
 
@@ -82,15 +78,14 @@ namespace Vector {
     // if there is an animation currently playing, or no-op if there's no
     // animation playing
     //
-    // If shouldRenderInEyeHue is true the spriteSequence keyframes will be treated as grayscale
+    // If overrideAllSpritesToEyeHue is true the SpriteBoxKeyFrames will be treated as grayscale
     // and rendered in the robot's eye hue - if it's false the keyframes will be rendered as RGB images
     Result SetStreamingAnimation(const std::string& name,
                                  Tag tag,
                                  u32 numLoops = 1,
                                  u32 startAt_ms = 0,
                                  bool interruptRunning = true,
-                                 bool shouldOverrideEyeHue = false,
-                                 bool shouldRenderInEyeHue = true);
+                                 bool overrideAllSpritesToEyeHue = false);
 
     // Subset of the function above that is applied in the ::Update function and called from PlayAnimation
     void SetPendingStreamingAnimation(const std::string& name, u32 numLoops);
@@ -100,17 +95,13 @@ namespace Vector {
     void Process_displayFaceImageChunk(const RobotInterface::DisplayFaceImageBinaryChunk& msg);
     void Process_displayFaceImageChunk(const RobotInterface::DisplayFaceImageGrayscaleChunk& msg);
     void Process_displayFaceImageChunk(const RobotInterface::DisplayFaceImageRGBChunk& msg);
-    void Process_displayCompositeImageChunk(const RobotInterface::DisplayCompositeImageChunk& msg);
-    void Process_updateCompositeImage(const RobotInterface::UpdateCompositeImage& msg);
-    void Process_playCompositeAnimation(const std::string& name, Tag tag);
 
+    void Process_playAnimWithSpriteBoxRemaps(const RobotInterface::PlayAnimWithSpriteBoxRemaps& msg);
 
-    Result SetFaceImage(Vision::SpriteHandle spriteHandle, bool shouldRenderInEyeHue, u32 duration_ms);
-    Result SetCompositeImage(Vision::CompositeImage* compImg, u32 frameInterval_ms, u32 duration_ms);
-    Result UpdateCompositeImage(Vision::LayerName layerName,
-                                const Vision::CompositeImageLayer::SpriteBox& spriteBox,
-                                Vision::SpriteName spriteName,
-                                u32 applyAt_ms);
+    void Process_playAnimWithSpriteBoxKeyFrames(const RobotInterface::PlayAnimWithSpriteBoxKeyFrames& msg);
+    void Process_addSpriteBoxKeyFrames(const RobotInterface::AddSpriteBoxKeyFrames& msg);
+
+    Result SetFaceImage(Vision::SpriteHandle spriteHandle, bool overrideAllSpritesToEyeHue, u32 duration_ms);
 
     Audio::ProceduralAudioClient* GetProceduralAudioClient() const { return _proceduralAudioClient.get(); }
 
@@ -125,10 +116,7 @@ namespace Vector {
     const Animation* GetStreamingAnimation() const { return _streamingAnimation; }
 
     void EnableKeepFaceAlive(bool enable, u32 disableTimeout_ms);
-
-    void SetDefaultKeepFaceAliveParams();
-    void SetParamToDefault(KeepFaceAliveParameter whichParam);
-    void SetParam(KeepFaceAliveParameter whichParam, float newValue);
+    void SetKeepFaceAliveFocus(bool enable);
 
     // Functions passed in here will be called each time a new animation is set to streaming
     void AddNewAnimationCallback(NewAnimationCallback callback) {
@@ -197,7 +185,10 @@ namespace Vector {
     // for display on a debug screen
     void RedirectFaceImagesToDebugScreen(bool redirect) { _redirectFaceImagesToDebugScreen = redirect; }
     
-    void SetBodyWhitelistActive(bool active) { _bodyWhiteListActive = active; }
+    void SetOnCharger(bool onCharger);
+    
+    // When on the charger, the robot won't play any motion or audio frames, irrespective of locked tracks
+    void SetFrozenOnCharger(bool enabled);
 
     // Procedural Eye
     void ProcessAddOrUpdateEyeShift(const RobotInterface::AddOrUpdateEyeShift& msg);
@@ -205,9 +196,10 @@ namespace Vector {
     void ProcessAddSquint(const RobotInterface::AddSquint& msg);
     void ProcessRemoveSquint(const RobotInterface::RemoveSquint& msg);
 
+    uint16_t GetNumLayersRendered() { return _numLayersRendered; }
 
   private:
-    const AnimContext* _context = nullptr;
+    const Anim::AnimContext* _context = nullptr;
 
     Animation*  _streamingAnimation = nullptr;
     Animation*  _neutralFaceAnimation = nullptr;
@@ -229,13 +221,6 @@ namespace Vector {
     // Start and end messages sent to engine
     bool _startOfAnimationSent = false;
     bool _endOfAnimationSent   = false;
-
-    // TEMP (Kevin K.): To minimize changes to the animation streamer legacy messages/functions
-    // were used when introducing composite image functionality. Unfortunately if these messages
-    // don't come in on the same tick it can create lots of strange issues. This temp hack
-    // may cause the animation not to play for a few additional ticks, but it's the safest change
-    // to make that solves synchronization issues
-    bool _expectingCompositeImage = false;
 
     bool _wasAnimationInterruptedWithNothing = false;
 
@@ -279,9 +264,6 @@ namespace Vector {
     // Which tracks are currently playing
     u8 _tracksInUse;
 
-    // For keep face alive animations
-    std::map<KeepFaceAliveParameter, f32> _keepFaceAliveParams;
-
     std::unique_ptr<Audio::AnimationAudioClient> _animAudioClient;
     std::unique_ptr<Audio::ProceduralAudioClient> _proceduralAudioClient;
 
@@ -313,20 +295,22 @@ namespace Vector {
     Vision::ImageRGB565 _faceImageRGB565;
     u32                 _faceImageRGBId                    = 0;          // Used only for tracking chunks of the same image as they are received
     u32                 _faceImageRGBChunksReceivedBitMask = 0;
-    const u32           kAllFaceImageRGBChunksReceivedMask = 0x3fffffff; // 30 bits for 30 expected chunks (FACE_DISPLAY_NUM_PIXELS / 600 pixels_per_msg ~= 30)
-
-    // Composite images
-    u32 _compositeImageID = 0;
-    std::unique_ptr<Vision::CompositeImageBuilder> _compositeImageBuilder;
+    const u32           kAllFaceImageRGBChunksReceivedMaskFor30Chunks = 0x3fffffff; // 30 bits for 30 expected chunks (FACE_DISPLAY_NUM_PIXELS / 600 pixels_per_msg ~= 30)
+    const u32           kAllFaceImageRGBChunksReceivedMaskFor22Chunks = 0x3fffff; // For new screem 22 bits for 22 expected chunks (FACE_DISPLAY_NUM_PIXELS / 600 pixels_per_msg ~= 22)
 
     // Tic counter for sending animState message
     u32           _numTicsToSendAnimState            = 0;
 
     bool _redirectFaceImagesToDebugScreen = false;
+    bool _lockFaceTrackAtEndOfStreamingAnimation = false;
 
     std::vector<NewAnimationCallback> _newAnimationCallbacks;
     
-    bool _bodyWhiteListActive = false;
+    bool _onCharger = false;
+    
+    bool _frozenOnCharger = false;
+    
+    static uint16_t _numLayersRendered;
 
     static bool IsTrackLocked(u8 lockedTracks, u8 trackFlagToCheck) {
       return ((lockedTracks & trackFlagToCheck) == trackFlagToCheck);
@@ -339,32 +323,32 @@ namespace Vector {
                                  u32 numLoops = 1,
                                  u32 startAt_ms = 0,
                                  bool interruptRunning = true,
-                                 bool shouldOverrideEyeHue = false,
-                                 bool shouldRenderInEyeHue = true,
+                                 bool overrideAllSpritesToEyeHue = false,
                                  bool isInternalAnim = true,
                                  bool shouldClearProceduralAnim = true);
 
     // Initialize the streaming of an animation with a given tag
     // (This will call anim->Init())
-    // if shouldOverrideEyeHue is set to true the value of shouldRenderInEyeHue will be applied
-    // to all sprites in the animation's SpriteSequenceTrack
-    Result InitStreamingAnimation(Tag withTag, u32 startAt_ms = 0, bool shouldOverrideEyeHue = false, bool shouldRenderInEyeHue = true);
+    Result InitStreamingAnimation(Tag withTag,
+                                  u32 startAt_ms = 0,
+                                  bool overrideAllSpritesToEyeHue = false);
 
     // Update Stream of either the streaming animation or procedural tracks
     Result ExtractAnimationMessages(AnimationMessageWrapper& stateToSend);
     // Actually stream the animation (called each tick)
     Result ExtractMessagesFromStreamingAnim(AnimationMessageWrapper& stateToSend);
+
     // Used to stream _just_ the stuff left in the various layers (all procedural stuff)
-    Result ExtractMessagesFromProceduralTracks(AnimationMessageWrapper& stateToSend) const;
+    Result ExtractMessagesFromProceduralTracks(AnimationMessageWrapper& stateToSend);
 
     // Combine the tracks inside of the specified animations with the tracks in the track layer component
     // specified, and then assign the output to stateToSend
-    static Result ExtractMessagesRelatedToProceduralTrackComponent(const AnimContext* context,
+    Result ExtractMessagesRelatedToProceduralTrackComponent(const Anim::AnimContext* context,
                                                                    Animation* anim,
                                                                    TrackLayerComponent* trackComp,
                                                                    const u8 tracksCurrentlyLocked,
                                                                    const TimeStamp_t timeSinceAnimStart_ms,
-                                                                   bool storeFace,
+                                                                   const bool storeFace,
                                                                    AnimationMessageWrapper& stateToSend);
 
 
@@ -414,17 +398,7 @@ namespace Vector {
     void InvalidateBannedTracks(const std::string& animName,
                                 AnimationMessageWrapper& messageWrapper) const;
 
-    // Inspects streaming track's sprite sequence track to see whether procedural
-    // eyes are needed this tick
-    static bool ShouldRenderProceduralFace(const Animations::Track<SpriteSequenceKeyFrame>& spriteTrack,
-                                           const u8 tracksCurrentlyLocked,
-                                           TimeStamp_t relativeStreamTime_ms);
-    static bool ShouldRenderSpriteTrack(const Animations::Track<SpriteSequenceKeyFrame>& spriteTrack,
-                                        const u8 tracksCurrentlyLocked,
-                                        TimeStamp_t relativeStreamTime_ms,
-                                        const bool proceduralFaceRendered);
-
-    static void GetStreamableFace(const AnimContext* context, const ProceduralFace& procFace, Vision::ImageRGB565& outImage);
+    static void GetStreamableFace(const Anim::AnimContext* context, const ProceduralFace& procFace, Vision::ImageRGB565& outImage);
     void BufferFaceToSend(Vision::ImageRGB565& image);
 
   #if ANKI_DEV_CHEATS
@@ -436,7 +410,8 @@ namespace Vector {
 
   }; // class AnimationStreamer
 
+} // namespace Anim
 } // namespace Vector
 } // namespace Anki
 
-#endif /* __Anki_Cozmo_AnimationStreamer_H__ */
+#endif /* __Anki_Vector_AnimationStreamer_H__ */

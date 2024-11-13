@@ -5,9 +5,11 @@ asset_project(
                 ('assets', 'cladToFileMaps/*.json'),
                 ('assets', 'RewardedActions/RewardedActions.json'),
                 ('assets', 'cubeFirmware/cube.dfu'),
-                ('externals/anki-thirdparty/sensory', 'sensorySpeechRecModels/hey_vector/**/*.raw'),
-                ('externals/anki-thirdparty/sensory', 'sensorySpeechRecModels/alexa/**/*.raw'),
-                ('externals/anki-thirdparty/pryon_lite', 'pryonSpeechRecModels/**/*.bin'),
+                ('assets', 'LocalizedStrings/**/*.json'),
+                ('3rd/snowboy', 'snowboyModels/*.res'),
+                ('3rd/snowboy', 'snowboyModels/*.umdl'),
+                ('3rd/snowboy', 'snowboyModels/*.pmdl'),
+                ('3rd/pryon_lite', 'pryonSpeechRecModels/**/*.bin'),
                 ('externals/animation-assets', 'animations/**/*.bin'),
                 ('externals/animation-assets', 'animationGroups/**/*.json'),
                 ('externals/animation-assets', 'sprites/**/*.png'),
@@ -86,6 +88,12 @@ asset_project(
            ]),
 )
 
+asset_project(
+    name = 'cozmo_resources_escapepod',
+    srcs = subdir_glob([
+                ('escapepod', '**/*'),
+           ]),
+)
 
 asset_project(
     name = 'cozmo_resources_test',
@@ -94,7 +102,6 @@ asset_project(
                 ],
            ),
 )
-
 
 asset_project(
     name = 'cozmo_resources_webserver',
@@ -109,12 +116,12 @@ asset_project(
     srcs = [],
     platform_srcs = [
         ('mac', subdir_glob([
-            ('externals/anki-thirdparty/acapela/AcapelaTTS_for_Mac_V9.450','**/*'),
+            ('3rd/acapela/AcapelaTTS_for_Mac_V9.450','**/*'),
             ],
             prefix = 'tts')
         ),
         ('vicos', subdir_glob([
-            ('externals/anki-thirdparty/acapela/Voices_for_Android_iOS_LinuxEmbedded','**/*'),
+            ('3rd/acapela/Voices_for_Android_iOS_LinuxEmbedded','**/*'),
             ],
             prefix = 'tts')
         ),

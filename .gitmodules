@@ -1,12 +1,6 @@
-[submodule "lib/audio"]
-	path = lib/audio
-	url = git@github.com:anki/anki-audio.git
-[submodule "lib/das-client"]
-	path = lib/das-client
-	url = git@github.com:anki/DAS-Client.git
-[submodule "lib/util/source/3rd/minimp3"]
-	path = lib/util/source/3rd/minimp3
-	url = git@github.com:anki/minimp3.git
-[submodule "tools/sdk/vector-python-sdk-private"]
-	path = tools/sdk/vector-python-sdk-private
-	url = git@github.com:anki/vector-python-sdk-private.git
+[submodule "EXTERNALS"]
+	path = EXTERNALS
+	url = https://github.com/kercre123/EXTERNALS
+[submodule "ota/wire-os"]
+	path = ota/wire-os
+	url = https://github.com/kercre123/wire-os

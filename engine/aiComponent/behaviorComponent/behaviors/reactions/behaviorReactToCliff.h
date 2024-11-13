@@ -25,8 +25,6 @@ class ICompoundAction;
 class BehaviorReactToCliff : public ICozmoBehavior
 {
 private:
-  using super = ICozmoBehavior;
-  
   // Enforce creation through BehaviorFactory
   friend class BehaviorFactory;
   BehaviorReactToCliff(const Json::Value& config);
@@ -50,9 +48,7 @@ protected:
   
   virtual void BehaviorUpdate() override;
 
-private:
-  using base = ICozmoBehavior;
-  
+private:  
   void TransitionToWaitForNoMotion();
   void TransitionToStuckOnEdge();
   void TransitionToPlayingCliffReaction();
@@ -91,6 +87,9 @@ private:
     // whether the robot has received a cliff event with a valid cliff pose
     // that serves as the look-at target for any visual observation actions
     bool hasTargetCliff; 
+    
+    // Used to cancel behavior if picked up for too long
+    TimeStamp_t lastPickupStartTime_ms;
     
     // used to determine where the robot searches for visual edges
     Pose3d cliffPose;

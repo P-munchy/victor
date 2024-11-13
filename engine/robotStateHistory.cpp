@@ -33,13 +33,12 @@ namespace Anki {
 
     HistRobotState::HistRobotState(const Pose3d& pose,
                                    const RobotState& state,
-                                   const ProxSensorData& proxData,
-                                   const uint8_t cliffDetectedFlags)
+                                   const ProxSensorData& proxData)
     {
       _pose  = pose;
       _state = state;
       _proxData = proxData;
-      _cliffDetectedFlags.SetFlags(cliffDetectedFlags);
+      _cliffDetectedFlags.SetFlags(state.cliffDetectedFlags);
     }
     
     void HistRobotState::SetPose(const PoseFrameID_t frameID, const Pose3d& pose,
@@ -119,6 +118,9 @@ namespace Anki {
       
       // Interp lift angle
       interpState.liftAngle = histState1.GetLiftAngle_rad() + fraction * (histState2.GetLiftAngle_rad() - histState1.GetLiftAngle_rad());
+
+      // Interp pitch
+      interpState.pose.pitch_angle = histState1.GetPitch_rad() + fraction * (histState2.GetPitch_rad() - histState1.GetPitch_rad());
       
       // Interp cliff data
       for (int i=0 ; i<interpState.cliffDataRaw.size() ; i++) {
@@ -156,13 +158,12 @@ namespace Anki {
       //
       // Interpolate booleans
       //
-      const auto interpCliffDetectedFlags = closestHistRobotState->_cliffDetectedFlags.GetFlags();
+      interpState.cliffDetectedFlags = closestHistRobotState->_cliffDetectedFlags.GetFlags();
       
       // Construct interpolated HistRobotState to return
       HistRobotState interpHistState(interpPose,
                                      interpState,
-                                     interpProxData,
-                                     interpCliffDetectedFlags);
+                                     interpProxData);
       
       return interpHistState;
     }
@@ -350,8 +351,9 @@ namespace Anki {
     // Interpolates pose if withInterpolation == true.
     // Returns OK if t is between the oldest and most recent timestamps stored.
     Result RobotStateHistory::GetRawStateAt(const RobotTimeStamp_t t_request,
-                                          RobotTimeStamp_t& t, HistRobotState& state,
-                                          bool withInterpolation) const
+                                            RobotTimeStamp_t& t, 
+                                            HistRobotState& state,
+                                            bool withInterpolation) const
     {
       // This pose occurs at or immediately after t_request
       const_StateMapIter_t it = _states.lower_bound(t_request);
@@ -439,6 +441,19 @@ namespace Anki {
       return RESULT_OK;
     }
 
+    Result RobotStateHistory::UpdateProxSensorData(const RobotTimeStamp_t t, const ProxSensorData& data)
+    {
+      StateMapIter_t it = _states.find(t); 
+      if (it == _states.end()) {
+        return RESULT_FAIL;
+      }
+      
+      HistRobotState& state = it->second;
+      state.SetProxSensorData(data);
+
+      return RESULT_OK;
+    }
+
     Result RobotStateHistory::GetVisionOnlyStateAt(const RobotTimeStamp_t t_request, HistRobotState** state)
     {
       StateMapIter_t it = _visStates.find(t_request);
@@ -450,8 +465,9 @@ namespace Anki {
     }
     
     Result RobotStateHistory::ComputeStateAt(const RobotTimeStamp_t t_request,
-                                           RobotTimeStamp_t& t, HistRobotState& state,
-                                           bool withInterpolation) const
+                                             RobotTimeStamp_t& t, 
+                                             HistRobotState& state,
+                                             bool withInterpolation) const
     {
       // If the vision-based version of the pose exists, return it.
       const_StateMapIter_t it = _visStates.find(t_request);
@@ -602,9 +618,9 @@ namespace Anki {
     }
     
     Result RobotStateHistory::ComputeAndInsertStateAt(const RobotTimeStamp_t t_request,
-                                                    RobotTimeStamp_t& t, HistRobotState** state,
-                                                    HistStateKey* key,
-                                                    bool withInterpolation)
+                                                      RobotTimeStamp_t& t, HistRobotState** state,
+                                                      HistStateKey* key,
+                                                      bool withInterpolation)
     {
       HistRobotState state_computed;
       //printf("COMPUTE+INSERT\n");
@@ -705,8 +721,8 @@ namespace Anki {
       // Start from end and work backward until we find a pose stamp with the
       // specified ID. Fail if we get back to the beginning without finding it.
       if (_states.empty()) {
-        LOG_ERROR("RobotStateHistory.GetLastStateWithFrameID.EmptyHistory",
-                  "Looking for last pose with frame ID=%d, but pose history is empty.", frameID);
+        LOG_INFO("RobotStateHistory.GetLastStateWithFrameID.EmptyHistory",
+                 "Looking for last pose with frame ID=%d, but pose history is empty.", frameID);
         return RESULT_FAIL;
       }
       
@@ -745,24 +761,43 @@ namespace Anki {
         return RESULT_OK;
         
       } else {
-        LOG_ERROR("RobotStateHistory.GetLastStateWithFrameID.FrameIdNotFound",
-                  "Could not find frame ID=%d in pose history. "
-                  "(First frameID in pose history is %d (t:%u), last is %d (t:%u). "
-                  "First frameID in vis pose history is %d (t:%u), last is %d (t:%u).)",
-                  frameID,
-                  _states.begin()->second.GetFrameId(),
-                  (TimeStamp_t)_states.begin()->first,
-                  _states.rbegin()->second.GetFrameId(),
-                  (TimeStamp_t)_states.rbegin()->first,
-                  (_visStates.empty() ? -1 : _visStates.begin()->second.GetFrameId()),
-                  (TimeStamp_t)(_visStates.empty() ? 0 : _visStates.begin()->first),
-                  (_visStates.empty() ? -1 : _visStates.rbegin()->second.GetFrameId()),
-                  (TimeStamp_t)(_visStates.empty() ? 0 : _visStates.rbegin()->first));
+        LOG_INFO("RobotStateHistory.GetLastStateWithFrameID.FrameIdNotFound",
+                 "Could not find frame ID=%d in pose history. "
+                 "(First frameID in pose history is %d (t:%u), last is %d (t:%u). "
+                 "First frameID in vis pose history is %d (t:%u), last is %d (t:%u).)",
+                 frameID,
+                 _states.begin()->second.GetFrameId(),
+                 (TimeStamp_t)_states.begin()->first,
+                 _states.rbegin()->second.GetFrameId(),
+                 (TimeStamp_t)_states.rbegin()->first,
+                 (_visStates.empty() ? -1 : _visStates.begin()->second.GetFrameId()),
+                 (TimeStamp_t)(_visStates.empty() ? 0 : _visStates.begin()->first),
+                 (_visStates.empty() ? -1 : _visStates.rbegin()->second.GetFrameId()),
+                 (TimeStamp_t)(_visStates.empty() ? 0 : _visStates.rbegin()->first));
         return RESULT_FAIL;
 
       }
       
     } // GetLastStateWithFrameID()
+
+
+    u32 RobotStateHistory::GetNumRawStatesWithFrameID(const PoseFrameID_t frameID) const
+    {
+      // First look through "raw" poses for the frame ID. We don't need to look
+      // any further once the frameID drops below the one we are looking for,
+      // because they are ordered
+      u32 cnt = 0;
+      for (auto poseIter = _states.rbegin(); poseIter != _states.rend(); ++poseIter )
+      {
+        auto currFrameId = poseIter->second.GetFrameId();
+        if (currFrameId == frameID) {
+          ++cnt;
+        } else if (currFrameId < frameID) {
+          break;
+        }
+      }
+      return cnt;
+    }
     
     void RobotStateHistory::CullToWindowSize()
     {

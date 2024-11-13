@@ -26,6 +26,7 @@
 #include "engine/aiComponent/behaviorComponent/behaviors/basicWorldInteractions/behaviorPlaceCubeByCharger.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/simpleFaceBehaviors/behaviorFindFaceAndThen.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/components/carryingComponent.h"
 #include "engine/components/cubes/cubeConnectionCoordinator.h"
 #include "engine/faceWorld.h"
@@ -55,9 +56,8 @@ BehaviorFetchCube::InstanceConfig::InstanceConfig()
 , chargerFilter(std::make_unique<BlockWorldFilter>())
 , skipConnectToCubeBehavior(true) //skip by default so we run it only when user driven
 {
-  cubesFilter->AddAllowedFamily(ObjectFamily::LightCube);
+  cubesFilter->AddFilterFcn(&BlockWorldFilter::IsLightCubeFilter);
 
-  chargerFilter->AddAllowedFamily(ObjectFamily::Charger);
   chargerFilter->AddAllowedType(ObjectType::Charger_Basic);
 }
 
@@ -91,7 +91,7 @@ bool BehaviorFetchCube::WantsToBeActivatedBehavior() const
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorFetchCube::GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const
 {
-  modifiers.visionModesForActiveScope->insert({ VisionMode::DetectingMarkers, EVisionUpdateFrequency::High });
+  modifiers.visionModesForActiveScope->insert({ VisionMode::Markers, EVisionUpdateFrequency::High });
   modifiers.wantsToBeActivatedWhenOnCharger = true;
   modifiers.wantsToBeActivatedWhenCarryingObject = false; 
   modifiers.cubeConnectionRequirements = BehaviorOperationModifiers::CubeConnectionRequirements::OptionalActive;

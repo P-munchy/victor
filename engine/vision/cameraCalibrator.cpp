@@ -13,8 +13,8 @@
 #include "engine/vision/cameraCalibrator.h"
 
 #include "coretech/common/engine/math/pose.h"
-#include "coretech/common/engine/math/rect_impl.h"
-#include "coretech/common/engine/math/rotation.h"
+#include "coretech/common/engine/math/quad.h"
+#include "coretech/common/shared/math/rotation.h"
 
 #include "anki/cozmo/shared/cozmoConfig.h"
 
@@ -66,14 +66,14 @@ CameraCalibrator::~CameraCalibrator()
 }
 
 Result CameraCalibrator::ComputeCalibrationFromCheckerboard(std::list<Vision::CameraCalibration>& calibration_out,
-                                                            DebugImageList<Vision::CompressedImage>& debugImages_out)
+                                                            Vision::DebugImageList<Vision::CompressedImage>& debugImages_out)
 {
   std::unique_ptr<Vision::CameraCalibration> calibration;
   _isCalibrating = true;
   
-  // Guarantee ComputingCalibration mode gets disabled and computed calibration gets sent
+  // Guarantee Calibration mode gets disabled and computed calibration gets sent
   // no matter how we return from this function
-  Util::CleanupHelper disableComputingCalibration([this, &calibration_out, &calibration]() {
+  Util::CleanupHelper disableCalibration([this, &calibration_out, &calibration]() {
     if(calibration == nullptr)
     {
       PRINT_NAMED_WARNING("CameraCalibrator.ComputeCalibrationFromCheckerboard.NullCalibration", "");
@@ -226,14 +226,14 @@ Result CameraCalibrator::ComputeCalibrationFromCheckerboard(std::list<Vision::Ca
 Result CameraCalibrator::ComputeCalibrationFromSingleTarget(CalibTargetType targetType,
                                                             const std::list<Vision::ObservedMarker>& observedMarkers,
                                                             std::list<Vision::CameraCalibration>& calibration_out,
-                                                            DebugImageList<Vision::CompressedImage>& debugImages_out)
+                                                            Vision::DebugImageList<Vision::CompressedImage>& debugImages_out)
 {
   std::unique_ptr<Vision::CameraCalibration> calibration;
   _isCalibrating = true;
   
-  // Guarantee ComputingCalibration mode gets disabled and computed calibration gets sent
+  // Guarantee Calibration mode gets disabled and computed calibration gets sent
   // no matter how we return from this function
-  Util::CleanupHelper disableComputingCalibration([this, &calibration_out, &calibration]() {
+  Util::CleanupHelper disableCalibration([this, &calibration_out, &calibration]() {
     if(calibration == nullptr)
     {
       PRINT_NAMED_WARNING("CameraCalibrator.ComputeCalibrationFromSingleTarget.NullCalibration", "");

@@ -1,8 +1,10 @@
 #include "cannedAnimLib/proceduralFace/proceduralFaceDrawer.h"
 #include "cannedAnimLib/proceduralFace/scanlineDistorter.h"
 
-#include "coretech/common/engine/array2d_impl.h"
-#include "coretech/common/engine/math/rotation.h"
+#include "coretech/common/shared/array2d.h"
+#include "coretech/common/shared/math/matrix.h"
+#include "coretech/common/engine/math/quad.h"
+#include "coretech/common/shared/math/rotation.h"
 
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -362,7 +364,7 @@ namespace Vector {
       }
     }
 
-    //ANKI_CPU_PROFILE_START(prof_getMat, "GetMatrices");
+    ANKI_CPU_PROFILE_START(prof_getMat, "GetMatrices");
     Point<2, Value> eyeCenter = (whichEye == WhichEye::Left) ?
                                  Point<2, Value>(ProceduralFace::GetNominalLeftEyeX(), ProceduralFace::GetNominalEyeY()) :
                                  Point<2, Value>(ProceduralFace::GetNominalRightEyeX(), ProceduralFace::GetNominalEyeY());
@@ -402,7 +404,7 @@ namespace Vector {
     Point2f upperLeft(ProceduralFace::WIDTH, ProceduralFace::HEIGHT);
     Point2f bottomRight(0.f,0.f);
 
-    //ANKI_CPU_PROFILE_START(prof_applyMat, "ApplyMatrices");
+    ANKI_CPU_PROFILE_START(prof_applyMat, "ApplyMatrices");
     // Warp the poly and the glow. Use the warped glow (which is a larger shape) to compute
     // the overall eye bounding box
     for(auto & point : eyePoly)
@@ -506,11 +508,10 @@ namespace Vector {
         Matrix_2x2f sigmaInv;
         {
           const Matrix_2x2f W22{W(0,0), W(0,1), W(1,0), W(1,1)};
-          Matrix_2x2f W22t;
-          W22.GetTranspose(W22t);
+          Matrix_2x2f W22t = W22.GetTranspose();
           const Matrix_2x2f sigma{sigmaX, 0.f, 0.f, sigmaY};
           const Matrix_2x2f sigmaWarped(sigma * W22t * W22 * sigma);
-          sigmaWarped.GetInverse(sigmaInv);
+          sigmaInv = sigmaWarped.GetInverse();
         }
 
         DEV_ASSERT_MSG(upperLeft.y()>=0 && bottomRight.y()<_eyeShape.GetNumRows(), "ProceduralFaceDrawer.DrawEye.BadRow", "%f %f", upperLeft.y(), bottomRight.y());
@@ -723,9 +724,7 @@ namespace Vector {
       DrawEye(_faceCache.faceData, WhichEye::Left,  W_facePtr, _faceCache.img8[_faceCache.eyes], _leftBBox);
       DrawEye(_faceCache.faceData, WhichEye::Right, W_facePtr, _faceCache.img8[_faceCache.eyes], _rightBBox);
       
-      std::array<Quad2f,2> leftRightQuads;
-      _leftBBox.GetQuad(leftRightQuads[0]);
-      _rightBBox.GetQuad(leftRightQuads[1]);
+      const std::array<Quad2f,2> leftRightQuads{{ Quad2f(_leftBBox), Quad2f(_rightBBox) }};
       
       _faceRowMin = ProceduralFace::HEIGHT-1;
       _faceRowMax = 0;

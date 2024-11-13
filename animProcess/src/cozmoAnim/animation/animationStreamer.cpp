@@ -13,12 +13,11 @@
  *
  **/
 
-#include "coretech/common/engine/array2d_impl.h"
+#include "coretech/common/shared/array2d.h"
 #include "coretech/common/engine/utils/timer.h"
 #include "coretech/common/engine/utils/data/dataPlatform.h"
 #include "cozmoAnim/animation/animationStreamer.h"
-#include "coretech/vision/shared/compositeImage/compositeImageBuilder.h"
-//#include "cozmoAnim/animation/trackLayerManagers/faceLayerManager.h"
+#include "coretech/vision/shared/compositeImage/compositeImage.h"
 
 #include "cannedAnimLib/cannedAnims/animationInterpolator.h"
 #include "cannedAnimLib/proceduralFace/proceduralFaceDrawer.h"
@@ -32,13 +31,10 @@
 #include "cozmoAnim/animContext.h"
 #include "cozmoAnim/animProcessMessages.h"
 #include "cozmoAnim/robotDataLoader.h"
-#include "anki/cozmo/shared/cozmoConfig.h"
-#include "clad/types/animationTypes.h"
 #include "osState/osState.h"
 #include "util/console/consoleInterface.h"
 #include "util/cpuProfiler/cpuProfiler.h"
 #include "util/fileUtils/fileUtils.h"
-#include "util/helpers/templateHelpers.h"
 #include "util/logging/logging.h"
 #include "util/string/stringUtils.h"
 #include "webServerProcess/src/webService.h"
@@ -48,15 +44,8 @@
 #include "clad/robotInterface/messageRobotToEngine_sendAnimToEngine_helper.h"
 #include "clad/robotInterface/messageEngineToRobot_sendAnimToRobot_helper.h"
 
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
-
 #include "jo_gif/jo_gif.h"
 #include "gif-h/gif.h"
-
-#include <stdio.h>
-#include <time.h>
-#include <vector>
 
 #define LOG_CHANNEL "Animations"
 
@@ -65,26 +54,25 @@
 
 namespace Anki {
 namespace Vector {
-
+namespace Anim {
 #define CONSOLE_GROUP "Face.ParameterizedFace"
 
   enum class FaceDisplayType {
     Normal,
-    Test,
+    Test,                 // Displays pattern showcasing RGB at different intensities
+    FullWhite,            // Displays a completely white image
     OverrideIndividually, // each eyes parameters operate on their respective eye
     OverrideTogether      // left eye parameters drive both left and right eyes
   };
 
   // Overrides whatever faces we're sending with a 3-stripe test pattern
   // (seems more related to the other ProceduralFace console vars, so putting it in that group instead)
-  CONSOLE_VAR_ENUM(int, kProcFace_Display,              CONSOLE_GROUP, 0, "Normal,Test,Override individually,Override together"); // Override procedural face with ConsoleVars edited version
+  CONSOLE_VAR_ENUM(int, kProcFace_Display,              CONSOLE_GROUP, 0, "Normal,Test,FullWhite,Override individually,Override together"); // Override procedural face with ConsoleVars edited version
 #if PROCEDURALFACE_NOISE_FEATURE
   CONSOLE_VAR_EXTERN(s32, kProcFace_NoiseNumFrames);
 #endif
   CONSOLE_VAR_ENUM(int, kProcFace_GammaType,            CONSOLE_GROUP, 0, "None,FromLinear,ToLinear,AddGamma,RemoveGamma,Custom");
   CONSOLE_VAR_RANGED(f32, kProcFace_Gamma,              CONSOLE_GROUP, 1.f, 1.f, 4.f);
-  // for automation to test earcons in dev builds
-  CONSOLE_VAR(bool, kAllowAudioOnCharger, "Alexa", true);
 
   enum class FaceGammaType {
     None,
@@ -99,8 +87,10 @@ namespace Vector {
   static ProceduralFace s_faceDataBaseline; // baseline to compare against, differences mean override the incoming animation
   static bool s_faceDataReset = false;
 
+  uint16_t AnimationStreamer::_numLayersRendered = 0;
+
 #if ANKI_DEV_CHEATS
-  static const AnimContext* s_context; // copy of AnimContext in first constructed AnimationStreamer, needed for GetDataPlatform
+  static const Anim::AnimContext* s_context; // copy of AnimContext in first constructed AnimationStreamer, needed for GetDataPlatform
   static bool s_faceDataOverrideRegistered = false;
   static uint8_t s_gammaLUT[3][256];// RGB x 256 entries
 
@@ -120,7 +110,7 @@ namespace Vector {
 
     Vision::Image tga;
     Result result = tga.Load(cacheFilename);
-    if(result == RESULT_OK) {
+    if (result == RESULT_OK) {
       const int width = tga.GetNumCols();
       const int height = tga.GetNumRows();
       const int channels = tga.GetNumChannels();
@@ -128,10 +118,10 @@ namespace Vector {
         const std::string html = std::string("<html>\n") +filename+" must be either a 256x1 image file\n" + "</html>\n";
         context->channel->WriteLog("%s", html.c_str());
       } else {
-        for(int channel = 0; channel < 3; ++channel) {
+        for (int channel = 0; channel < 3; ++channel) {
           // greyscale: offset = 0 always, RGB and RGBA: offset is channel, A is ignored
           uint8_t* srcPtr = tga.GetRawDataPointer() + (channel % channels);
-          for(int x = 0; x < width; ++x) {
+          for (int x = 0; x < width; ++x) {
             s_gammaLUT[channel][x] = *srcPtr;
             srcPtr += channels;
           }
@@ -142,24 +132,24 @@ namespace Vector {
     } else {
       // see https://ankiinc.atlassian.net/browse/VIC-1646 to productize .tga loading
       std::vector<uint8_t> tga = Anki::Util::FileUtils::ReadFileAsBinary(cacheFilename);
-      if(tga.size() < 18) {
+      if (tga.size() < 18) {
         const std::string html = std::string("<html>\n") +filename+" is not a .tga file\n" + "</html>\n";
         context->channel->WriteLog("%s", html.c_str());
       } else {
         const int width = tga[12]+tga[13]*256;
         const int height = tga[14]+tga[15]*256;
         const int bytesPerPixel = tga[16] / 8;
-        if(tga[2] != 2 && tga[2] != 3) {
+        if (tga[2] != 2 && tga[2] != 3) {
           const std::string html = std::string("<html>\n") +filename+" is not an uncompressed, true-color or grayscale .tga file\n" + "</html>\n";
           context->channel->WriteLog("%s", html.c_str());
         } else if (width != 256 || height != 1) {
           const std::string html = std::string("<html>\n") +filename+" must be a 256x1 .tga file\n" + "</html>\n";
           context->channel->WriteLog("%s", html.c_str());
         } else {
-          for(int channel = 0; channel < 3; ++channel) {
+          for (int channel = 0; channel < 3; ++channel) {
             // greyscale: offset = 0 always, RGB and RGBA: offset is channel, A is ignored
             uint8_t* srcPtr = &tga[18 + (channel % bytesPerPixel)];
-            for(int x = 0; x < width; ++x) {
+            for (int x = 0; x < width; ++x) {
               s_gammaLUT[channel][x] = *srcPtr;
               srcPtr += bytesPerPixel;
             }
@@ -187,22 +177,6 @@ namespace Vector {
 
   // Default time to wait before forcing KeepFaceAlive() after the latest stream has stopped
   const f32 kDefaultLongEnoughSinceLastStreamTimeout_s = 0.5f;
-
-  // Default KeepFaceAliveParams
-  #define SET_DEFAULT(param, value) {KeepFaceAliveParameter::param, static_cast<f32>(value)}
-  const std::unordered_map<KeepFaceAliveParameter, f32> _kDefaultKeepFaceAliveParams = {
-    SET_DEFAULT(BlinkSpacingMinTime_ms, 3000),
-    SET_DEFAULT(BlinkSpacingMaxTime_ms, 4000),
-    SET_DEFAULT(EyeDartSpacingMinTime_ms, 250),
-    SET_DEFAULT(EyeDartSpacingMaxTime_ms, 1000),
-    SET_DEFAULT(EyeDartMaxDistance_pix, 6),
-    SET_DEFAULT(EyeDartMinDuration_ms, 50),
-    SET_DEFAULT(EyeDartMaxDuration_ms, 200),
-    SET_DEFAULT(EyeDartOuterEyeScaleIncrease, 0.1f),
-    SET_DEFAULT(EyeDartUpMaxScale, 1.1f),
-    SET_DEFAULT(EyeDartDownMinScale, 0.85f)
-  };
-  #undef SET_DEFAULT
 
   bool kIsInManualUpdateMode    = false;
   u32 kCurrentManualFrameNumber = 0;
@@ -232,7 +206,7 @@ namespace Vector {
   void ToggleManualControlOfAnimStreamer(ConsoleFunctionContextRef context)
   {
     kIsInManualUpdateMode = !kIsInManualUpdateMode;
-    if(kIsInManualUpdateMode && (sDevRelativeTimePtr != nullptr)){
+    if (kIsInManualUpdateMode && (sDevRelativeTimePtr != nullptr)){
       kCurrentManualFrameNumber = *sDevRelativeTimePtr/ANIM_TIME_STEP_MS;
     }
   }
@@ -257,7 +231,7 @@ namespace Vector {
 
   void CaptureFaceImage(ConsoleFunctionContextRef context)
   {
-    if(sDevBufferFacePtr != nullptr){
+    if (sDevBufferFacePtr != nullptr){
       auto folder = DevGetFaceImagFolder();
 
       // make sure our folder structure exists
@@ -267,13 +241,13 @@ namespace Vector {
       }
 
       std::string animName;
-      if((sStreamingAnimationPtrPtr != nullptr) &&
-         (*sStreamingAnimationPtrPtr != nullptr)){
+      if ( (sStreamingAnimationPtrPtr != nullptr) &&
+          (*sStreamingAnimationPtrPtr != nullptr)){
         animName = (*sStreamingAnimationPtrPtr)->GetName();
       }
 
       const std::string filename = ( folder + animName + "_" + std::to_string(kCurrentManualFrameNumber) + ".png" );
-      if(Util::FileUtils::FileExists(filename)){
+      if (Util::FileUtils::FileExists(filename)) {
         Util::FileUtils::DeleteFile(filename);
       }
 
@@ -330,21 +304,21 @@ namespace Vector {
   {
     std::string html;
 
-    if(s_framesToCapture == 0) {
+    if (s_framesToCapture == 0) {
       s_frameFilename = ConsoleArg_GetOptional_String(context, "filename", "screenshot.tga");
       const int numFrames = ConsoleArg_GetOptional_Int(context, "numFrames", 1);
 
       const Util::Data::DataPlatform* dataPlatform = s_context->GetDataPlatform();
       const std::string cacheFilename = dataPlatform->pathToResource(Util::Data::Scope::Cache, s_frameFilename);
 
-      if(s_frameFilename.find(".gif") != std::string::npos) {
+      if (s_frameFilename.find(".gif") != std::string::npos) {
         s_gifVersion = 1;
         s_gif1 = jo_gif_start(cacheFilename.c_str(), FACE_DISPLAY_WIDTH, FACE_DISPLAY_HEIGHT, 0, 256);
-        if(s_gif1.fp != nullptr) {
+        if (s_gif1.fp != nullptr) {
           s_framesToCapture = numFrames;
         }
 
-      } else if(s_frameFilename.find(".GIF") != std::string::npos) {
+      } else if (s_frameFilename.find(".GIF") != std::string::npos) {
         s_gifVersion = 2;
         if (GifBegin(&s_gif2, cacheFilename.c_str(), FACE_DISPLAY_WIDTH, FACE_DISPLAY_HEIGHT, 0, 8)) {
           s_framesToCapture = numFrames;
@@ -352,7 +326,7 @@ namespace Vector {
 
       } else {
         s_tga = fopen(cacheFilename.c_str(), "wb");
-        if(s_tga != nullptr) {
+        if (s_tga != nullptr) {
           uint8_t head[18] = {0};
           head[ 2] = 2; // uncompressed, true-color image
           head[12] = FACE_DISPLAY_WIDTH & 0xff;
@@ -367,7 +341,7 @@ namespace Vector {
         }
       }
 
-      if(s_framesToCapture > 0) {
+      if (s_framesToCapture > 0) {
         s_frameStart = clock();
         s_frame = 0;
 
@@ -394,7 +368,7 @@ namespace Vector {
 
 #undef CONSOLE_GROUP
 
-  AnimationStreamer::AnimationStreamer(const AnimContext* context)
+  AnimationStreamer::AnimationStreamer(const Anim::AnimContext* context)
   : _context(context)
   , _proceduralTrackComponent(new TrackLayerComponent(context))
   , _lockedTracks((u8)AnimTrackFlag::BACKPACK_LIGHTS_TRACK)
@@ -423,9 +397,6 @@ namespace Vector {
 
   Result AnimationStreamer::Init(TextToSpeechComponent* ttsComponent)
   {
-
-    SetDefaultKeepFaceAliveParams();
-
     // TODO: Restore ability to subscribe to messages here?
     //       It's currently hard to do with CPPlite messages.
     // SetupHandlers(_context->GetExternalInterface());
@@ -487,11 +458,11 @@ namespace Vector {
   }
 
   Result AnimationStreamer::SetStreamingAnimation(const std::string& name, Tag tag, u32 numLoops, u32 startAt_ms,
-                                                  bool interruptRunning, bool shouldOverrideEyeHue, bool shouldRenderInEyeHue)
+                                                  bool interruptRunning, bool overrideAllSpritesToEyeHue)
   {
     // Special case: stop streaming the current animation
-    if(name.empty()) {
-      if(DEBUG_ANIMATION_STREAMING) {
+    if (name.empty()) {
+      if (DEBUG_ANIMATION_STREAMING) {
         LOG_DEBUG("AnimationStreamer.SetStreamingAnimation.StoppingCurrent",
                   "Stopping streaming of animation '%s'.",
                   GetStreamingAnimationName().c_str());
@@ -502,7 +473,7 @@ namespace Vector {
     }
     auto* anim = _context->GetDataLoader()->GetCannedAnimation(name);
     return SetStreamingAnimation(anim, tag, numLoops, startAt_ms, interruptRunning,
-                                 shouldOverrideEyeHue, shouldRenderInEyeHue, false);
+                                 overrideAllSpritesToEyeHue, false);
   }
 
   void AnimationStreamer::SetPendingStreamingAnimation(const std::string& name, u32 numLoops)
@@ -514,10 +485,10 @@ namespace Vector {
 
   Result AnimationStreamer::SetStreamingAnimation(Animation* anim, Tag tag, u32 numLoops, u32 startAt_ms,
                                                   bool interruptRunning,
-                                                  bool shouldOverrideEyeHue, bool shouldRenderInEyeHue,
+                                                  bool overrideAllSpritesToEyeHue,
                                                   bool isInternalAnim, bool shouldClearProceduralAnim)
   {
-    if(DEBUG_ANIMATION_STREAMING)
+    if (DEBUG_ANIMATION_STREAMING)
     {
       LOG_DEBUG("AnimationStreamer.SetStreamingAnimation", "Name:%s Tag:%d NumLoops:%d",
                 anim != nullptr ? anim->GetName().c_str() : "NULL", tag, numLoops);
@@ -525,9 +496,9 @@ namespace Vector {
 
     const bool wasStreamingSomething = (nullptr != _streamingAnimation);
 
-    if(wasStreamingSomething)
+    if (wasStreamingSomething)
     {
-      if(nullptr != anim && !interruptRunning) {
+      if (nullptr != anim && !interruptRunning) {
         LOG_INFO("AnimationStreamer.SetStreamingAnimation.NotInterrupting",
                  "Already streaming %s, will not interrupt with %s",
                  _streamingAnimation->GetName().c_str(),
@@ -545,7 +516,7 @@ namespace Vector {
 
     _streamingAnimation = anim;
 
-    if(_streamingAnimation == nullptr) {
+    if (_streamingAnimation == nullptr) {
       // Perform New Animation Callbacks to prepare for procedural animations
       for (const auto& callback: _newAnimationCallbacks) {
         callback();
@@ -558,11 +529,11 @@ namespace Vector {
     _loopCtr = 0;
     _numLoops = numLoops;
     // Get the animation ready to play
-    InitStreamingAnimation(tag, startAt_ms, shouldOverrideEyeHue, shouldRenderInEyeHue);
+    InitStreamingAnimation(tag, startAt_ms, overrideAllSpritesToEyeHue);
 
     _playingInternalAnim = isInternalAnim;
 
-    if(DEBUG_ANIMATION_STREAMING) {
+    if (DEBUG_ANIMATION_STREAMING) {
       LOG_DEBUG("AnimationStreamer.SetStreamingAnimation",
                 "Will start streaming '%s' animation %d times with tag=%d.",
                 _streamingAnimation->GetName().c_str(), numLoops, tag);
@@ -580,13 +551,13 @@ namespace Vector {
     Result result = _proceduralAnimation->AddKeyFrameToBack(keyframe);
 
     // Add a second one later to interpolate to, if duration is longer than one keyframe
-    if(RESULT_OK == result && duration_ms > ANIM_TIME_STEP_MS)
+    if (RESULT_OK == result && duration_ms > ANIM_TIME_STEP_MS)
     {
       keyframe.SetTriggerTime_ms(duration_ms-ANIM_TIME_STEP_MS);
       result = _proceduralAnimation->AddKeyFrameToBack(keyframe);
     }
 
-    if(!(ANKI_VERIFY(RESULT_OK == result, "AnimationStreamer.SetProceduralFace.FailedToCreateAnim", "")))
+    if (!(ANKI_VERIFY(RESULT_OK == result, "AnimationStreamer.SetProceduralFace.FailedToCreateAnim", "")))
     {
       return result;
     }
@@ -611,23 +582,23 @@ namespace Vector {
 #       define DEBUG_STREAM_KEYFRAME_MESSAGE(__KF_NAME__)
 #     endif
 
-    if(SendIfTrackUnlocked(stateToSend.moveHeadMessage, AnimTrackFlag::HEAD_TRACK)) {
+    if (SendIfTrackUnlocked(stateToSend.moveHeadMessage, AnimTrackFlag::HEAD_TRACK)) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("HeadAngle");
     }
 
-    if(SendIfTrackUnlocked(stateToSend.moveLiftMessage, AnimTrackFlag::LIFT_TRACK)) {
+    if (SendIfTrackUnlocked(stateToSend.moveLiftMessage, AnimTrackFlag::LIFT_TRACK)) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("LiftHeight");
     }
 
-    if(SendIfTrackUnlocked(stateToSend.bodyMotionMessage, AnimTrackFlag::BODY_TRACK)) {
+    if (SendIfTrackUnlocked(stateToSend.bodyMotionMessage, AnimTrackFlag::BODY_TRACK)) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("BodyMotion");
     }
 
-    if(SendIfTrackUnlocked(stateToSend.recHeadMessage, AnimTrackFlag::BODY_TRACK)) {
+    if (SendIfTrackUnlocked(stateToSend.recHeadMessage, AnimTrackFlag::BODY_TRACK)) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("RecordHeading");
     }
 
-    if(SendIfTrackUnlocked(stateToSend.turnToRecHeadMessage, AnimTrackFlag::BODY_TRACK)) {
+    if (SendIfTrackUnlocked(stateToSend.turnToRecHeadMessage, AnimTrackFlag::BODY_TRACK)) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("TurnToRecordedHeading");
     }
 
@@ -635,18 +606,19 @@ namespace Vector {
       EnableBackpackAnimationLayer(true);
     }
 
-    if(stateToSend.audioKeyFrameMessage != nullptr){
+    if (stateToSend.audioKeyFrameMessage != nullptr) {
       _animAudioClient->PlayAudioKeyFrame( *stateToSend.audioKeyFrameMessage, _context->GetRandom() );
+      Util::SafeDelete(stateToSend.audioKeyFrameMessage);
     }
 
     // Send AnimationEvent directly up to engine if it's time to play one
-    if (stateToSend.eventMessage != nullptr){
+    if (stateToSend.eventMessage != nullptr) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("Event");
       RobotInterface::SendAnimToEngine(*stateToSend.eventMessage);
       Util::SafeDelete(stateToSend.eventMessage);
     }
 
-    if(stateToSend.haveFaceToSend){
+    if (stateToSend.haveFaceToSend) {
       DEBUG_STREAM_KEYFRAME_MESSAGE("FaceAnimation");
       BufferFaceToSend(stateToSend.faceImg);
     }
@@ -666,7 +638,7 @@ namespace Vector {
     // Expand the bit-packed msg.faceData (every bit == 1 pixel) to byte array (every byte == 1 pixel)
     static const u32 kExpectedNumPixels = FACE_DISPLAY_NUM_PIXELS/2;
     static const u32 kDataLength = sizeof(msg.faceData);
-    static_assert(8 * kDataLength == kExpectedNumPixels, "Mismatched face image and bit image sizes");
+    // static_assert(8 * kDataLength == kExpectedNumPixels, "Mismatched face image and bit image sizes");
 
     if (msg.imageId != _faceImageId) {
       if (_faceImageChunksReceivedBitMask != 0) {
@@ -702,8 +674,10 @@ namespace Vector {
       img->SetFromGray(_faceImageGrayscale);
       auto handle = std::make_shared<Vision::SpriteWrapper>(img);
       //LOG_DEBUG("AnimationStreamer.Process_displayFaceImageChunk.CompleteFaceReceived", "");
-      const bool shouldRenderInEyeHue = true;
-      SetFaceImage(handle, shouldRenderInEyeHue, msg.duration_ms);
+      EnableKeepFaceAlive(false, msg.duration_ms);
+      const bool overrideAllSpritesToEyeHue = true;
+      SetFaceImage(handle, overrideAllSpritesToEyeHue, msg.duration_ms);
+      _wasAnimationInterruptedWithNothing = true;
       _faceImageId = 0;
       _faceImageChunksReceivedBitMask = 0;
     }
@@ -738,8 +712,10 @@ namespace Vector {
       img->SetFromGray(_faceImageGrayscale);
       auto handle = std::make_shared<Vision::SpriteWrapper>(img);
       //LOG_DEBUG("AnimationStreamer.Process_displayFaceImageGrayscaleChunk.CompleteFaceReceived", "");
-      const bool shouldRenderInEyeHue = true;
-      SetFaceImage(handle, shouldRenderInEyeHue, msg.duration_ms);
+      EnableKeepFaceAlive(false, msg.duration_ms);
+      const bool overrideAllSpritesToEyeHue = true;
+      SetFaceImage(handle, overrideAllSpritesToEyeHue, msg.duration_ms);
+      _wasAnimationInterruptedWithNothing = true;
       _faceImageGrayscaleId = 0;
       _faceImageGrayscaleChunksReceivedBitMask = 0;
     }
@@ -762,215 +738,117 @@ namespace Vector {
     static const u16 kMaxNumPixelsPerChunk = sizeof(msg.faceData) / sizeof(msg.faceData[0]);
     const auto numPixels = std::min(msg.numPixels, kMaxNumPixelsPerChunk);
     std::copy_n(msg.faceData, numPixels, _faceImageRGB565.GetRawDataPointer() + (msg.chunkIndex * kMaxNumPixelsPerChunk) );
+    
+    u32 kAllFaceImageRGBChunksReceivedMask = IsXray() ? kAllFaceImageRGBChunksReceivedMaskFor22Chunks : kAllFaceImageRGBChunksReceivedMaskFor30Chunks;
 
     if (_faceImageRGBChunksReceivedBitMask == kAllFaceImageRGBChunksReceivedMask) {
       auto* img = new Vision::ImageRGBA(FACE_DISPLAY_HEIGHT, FACE_DISPLAY_WIDTH);
       img->SetFromRGB565(_faceImageRGB565);
       auto handle = std::make_shared<Vision::SpriteWrapper>(img);
       //LOG_DEBUG("AnimationStreamer.Process_displayFaceImageRGBChunk.CompleteFaceReceived", "");
-      const bool shouldRenderInEyeHue = false;
-      SetFaceImage(handle, shouldRenderInEyeHue, msg.duration_ms);
+      EnableKeepFaceAlive(false, msg.duration_ms);
+      const bool overrideAllSpritesToEyeHue = false;
+      SetFaceImage(handle, overrideAllSpritesToEyeHue, msg.duration_ms);
+      _wasAnimationInterruptedWithNothing = true;
       _faceImageRGBId = 0;
       _faceImageRGBChunksReceivedBitMask = 0;
     }
   }
 
-  void AnimationStreamer::Process_displayCompositeImageChunk(const RobotInterface::DisplayCompositeImageChunk& msg)
-  {
-    // Check for image ID mismatches
-    if(_compositeImageBuilder != nullptr){
-      if(msg.compositeImageID != _compositeImageID){
-        _compositeImageBuilder.reset();
-        LOG_WARNING("AnimationStreamer.Process_displayCompositeImageChunk.MissingChunk",
-                    "Composite image was being built with image ID %d, but new ID %d received so wiping image",
-                    _compositeImageID, msg.compositeImageID);
-      }
-    }
-    _compositeImageID = msg.compositeImageID;
-
-    auto* spriteCache = _context->GetDataLoader()->GetSpriteCache();
-    auto* spriteSeqContainer = _context->GetDataLoader()->GetSpriteSequenceContainer();
-
-    // Add the chunk to the builder
-    if(_compositeImageBuilder == nullptr){
-      auto* builder = new Vision::CompositeImageBuilder(spriteCache, spriteSeqContainer, msg.compositeImageChunk);
-      _compositeImageBuilder.reset(builder);
-    }else{
-      _compositeImageBuilder->AddImageChunk(spriteCache, spriteSeqContainer, msg.compositeImageChunk);
-    }
-
-    // Display the image if all chunks received
-    if(_compositeImageBuilder->CanBuildImage()){
-      Vision::HSImageHandle faceHueAndSaturation = ProceduralFace::GetHueSatWrapper();
-      auto* outImage = new Vision::CompositeImage(_context->GetDataLoader()->GetSpriteCache(),
-                                                  faceHueAndSaturation,
-                                                  _context->GetDataLoader()->GetSpritePaths());
-      const bool builtImage = _compositeImageBuilder->GetCompositeImage(*outImage);
-      if(ANKI_VERIFY(builtImage,
-                     "AnimationStreamer.Process_displayCompositeImageChunk.FailedToBuildImage",
-                     "Composite image failed to build")){
-        SetCompositeImage(outImage, msg.get_frame_interval_ms, msg.duration_ms);
-      }
-
-      _compositeImageBuilder.reset();
-    }
-
-  }
-
-  void AnimationStreamer::Process_updateCompositeImage(const RobotInterface::UpdateCompositeImage& msg)
-  {
-    Vision::CompositeImageLayer::SpriteBox sb(msg.serializedSpriteBox);
-    UpdateCompositeImage(msg.layerName, sb, msg.spriteName, msg.applyAt_ms);
-  }
-
-  void AnimationStreamer::Process_playCompositeAnimation(const std::string& name, Tag tag)
+  void AnimationStreamer::Process_playAnimWithSpriteBoxRemaps(const RobotInterface::PlayAnimWithSpriteBoxRemaps& msg)
   {
     const u32 numLoops = 1;
     const u32 startAtTime_ms = 0;
     const bool interruptRunning = true;
-    const bool shouldOverrideEyeHue = true;
-    const bool shouldRenderInEyeHue = false;
+    const bool overrideAllSpritesToEyeHue = false;
     const bool isInternalAnim = false;
 
     // Hack: if _streamingAnimation == _proceduralAnimation, the subsequent CopyIntoProceduralAnimation call
     // will delete *_streamingAnimation without assigning it to nullptr. This assignment prevents associated
     // undefined behavior
     _streamingAnimation = _neutralFaceAnimation;
-    CopyIntoProceduralAnimation(_context->GetDataLoader()->GetCannedAnimation(name));
-    SetStreamingAnimation(_proceduralAnimation, tag, numLoops, startAtTime_ms, interruptRunning,
-                          shouldOverrideEyeHue, shouldRenderInEyeHue, isInternalAnim);
-
-    _expectingCompositeImage = true;
+    const std::string animName(msg.animName, msg.animName_length);
+    CopyIntoProceduralAnimation(_context->GetDataLoader()->GetCannedAnimation(animName));
+    for (int i = 0; i < msg.numRemaps; ++i)
+    {
+      _proceduralAnimation->AddSpriteBoxRemap(msg.spriteBoxRemaps[i].spriteBoxName,
+                                              msg.spriteBoxRemaps[i].remappedAssetID);
+    }
+    SetStreamingAnimation(_proceduralAnimation, msg.tag, numLoops, startAtTime_ms, interruptRunning,
+                          overrideAllSpritesToEyeHue, isInternalAnim);
+    _lockFaceTrackAtEndOfStreamingAnimation = msg.lockFaceAtEndOfAnim;
   }
 
-  Result AnimationStreamer::SetFaceImage(Vision::SpriteHandle spriteHandle, bool shouldRenderInEyeHue, u32 duration_ms)
+  void AnimationStreamer::Process_playAnimWithSpriteBoxKeyFrames(
+    const RobotInterface::PlayAnimWithSpriteBoxKeyFrames& msg)
   {
-    if (_redirectFaceImagesToDebugScreen) {
+    const u32 numLoops = 1;
+    const u32 startAtTime_ms = 0;
+    const bool interruptRunning = true;
+    const bool overrideAllSpritesToEyeHue = false;
+    const bool isInternalAnim = false;
+
+    _streamingAnimation = _neutralFaceAnimation;
+    const std::string animName(msg.animName, msg.animName_length);
+    if(animName.empty())
+    {
+      _proceduralAnimation->Clear();
+    }
+    else
+    {
+      CopyIntoProceduralAnimation(_context->GetDataLoader()->GetCannedAnimation(animName));
+    }
+
+    for(int i = 0; i < msg.numKeyFrames; ++i)
+    {
+      Vision::SpriteBoxKeyFrame keyFrame(msg.spriteBoxKeyFrames[i]);
+      _proceduralAnimation->AddSpriteBoxKeyFrame(std::move(keyFrame));
+    }
+    
+    SetStreamingAnimation(_proceduralAnimation, msg.tag, numLoops, startAtTime_ms, interruptRunning,
+                          overrideAllSpritesToEyeHue, isInternalAnim);
+  }
+
+  void AnimationStreamer::Process_addSpriteBoxKeyFrames(const RobotInterface::AddSpriteBoxKeyFrames& msg)
+  {
+    if(_streamingAnimation != _proceduralAnimation){
+      LOG_ERROR("AnimationStreamer.AddSpriteBoxKeyFrames.NoAnimation",
+                "Attempted to add keyframes to running anim, but no _proceduralAnim was running");
+      return;
+    }
+
+    for(int i = 0; i < msg.numKeyFrames; ++i)
+    {
+      Vision::SpriteBoxKeyFrame keyFrame(msg.spriteBoxKeyFrames[i]);
+      _proceduralAnimation->AddSpriteBoxKeyFrame(std::move(keyFrame));
+    }
+  }
+
+  Result AnimationStreamer::SetFaceImage(Vision::SpriteHandle spriteHandle,
+                                         bool overrideAllSpritesToEyeHue,
+                                         u32 duration_ms)
+  {
+    if (_redirectFaceImagesToDebugScreen)
+    {
       Vision::ImageRGB565 debugImg;
       debugImg.SetFromImageRGB(spriteHandle->GetSpriteContentsRGBA());
       FaceInfoScreenManager::getInstance()->DrawCameraImage(debugImg);
 
-      // TODO: Return here or will that screw up stuff on the engine side?
-      //return RESULT_OK;
+      return RESULT_OK;
     }
 
     DEV_ASSERT(nullptr != _proceduralAnimation, "AnimationStreamer.SetFaceImage.NullProceduralAnimation");
 
-    auto& spriteSeqTrack = _proceduralAnimation->GetTrack<SpriteSequenceKeyFrame>();
-
-    if(_streamingAnimation == _proceduralAnimation){
-      // If the current keyframe will end, leave it alone
-      // Otherwise, clear the track and set the streaming animation to nullptr so that the new
-      // procedural animation will be initialized below
-      if(spriteSeqTrack.HasFramesLeft() &&
-         !spriteSeqTrack.GetCurrentKeyFrame().SequenceShouldAdvance()){
-        spriteSeqTrack.Clear();
-        SetStreamingAnimation(nullptr, 0);
-      }
-    }else{
-      // Procedural animation is not playing, so clear the previous track
-      spriteSeqTrack.Clear();
-    }
-
-    TimeStamp_t triggerTime_ms = 0;
-    // If procedural animation is playing relative stream time has been incrementing
-    // to play this keyframe immediately, set the keyframe to the current stream time
-    if((spriteSeqTrack.GetLastKeyFrame() == nullptr) &&
-       (_streamingAnimation == _proceduralAnimation)){
-      triggerTime_ms = _relativeStreamTime_ms;
-    }
-
-    SpriteSequenceKeyFrame kf(spriteHandle, triggerTime_ms, shouldRenderInEyeHue);
-    kf.SetKeyframeActiveDuration_ms(duration_ms);
-
-    Result result = _proceduralAnimation->AddKeyFrameToBack(kf);
-    if(!(ANKI_VERIFY(RESULT_OK == result, "AnimationStreamer.SetFaceImage.FailedToAddKeyFrame", "")))
+    _proceduralAnimation->SetFaceImageOverride(spriteHandle, _relativeStreamTime_ms, duration_ms);
+    if (_streamingAnimation != _proceduralAnimation)
     {
-      return result;
-    }
-
-    if(_streamingAnimation != _proceduralAnimation){
-      result = SetStreamingAnimation(_proceduralAnimation, 0);
-    }
-    return result;
-  }
-
-  Result AnimationStreamer::SetCompositeImage(Vision::CompositeImage* compImg, u32 frameInterval_ms,
-                                              u32 duration_ms)
-  {
-    _expectingCompositeImage = false;
-    DEV_ASSERT(nullptr != _proceduralAnimation, "AnimationStreamer.SetCompositeImage.NullProceduralAnimation");
-    // If procedural animation is streaming set the streaming animation to nullptr
-    // without clearing it out so that the animation can be restarted with the composite image data
-    Tag preserveTag = 0;
-    if(_streamingAnimation == _proceduralAnimation){
-      preserveTag = _tag;
-      const u32 numLoops = 1;
-      const u32 startTime_ms = 0;
-      const bool interruptRunning = true;
-      const bool shouldOverrideEyeHue = false;
-      const bool shouldRenderInEyeHue = false;
-      const bool isInternalAnim = true;
-      const bool shouldClearProceduralAnim = false;
-      SetStreamingAnimation(nullptr, 0, numLoops, startTime_ms, interruptRunning,
-                            shouldOverrideEyeHue, shouldRenderInEyeHue,
-                            isInternalAnim, shouldClearProceduralAnim);
-    }
-
-    // Clear out any runtime sequences currently set on the procedural animation
-    auto& spriteSeqTrack = _proceduralAnimation->GetTrack<SpriteSequenceKeyFrame>();
-    spriteSeqTrack.Clear();
-
-    const bool shouldRenderInEyeHue = false;
-    // Trigger time of keyframe is 0 since we want it to start playing immediately
-    auto* spriteCache = _context->GetDataLoader()->GetSpriteCache();
-    SpriteSequenceKeyFrame kf(spriteCache, compImg, frameInterval_ms,
-                              shouldRenderInEyeHue);
-    kf.SetKeyframeActiveDuration_ms(duration_ms);
-    Result result = _proceduralAnimation->AddKeyFrameToBack(kf);
-    if(!(ANKI_VERIFY(RESULT_OK == result, "AnimationStreamer.SetCompositeImage.FailedToAddKeyFrame", "")))
+      return SetStreamingAnimation(_proceduralAnimation, 0, 0, 0, true, overrideAllSpritesToEyeHue);
+    } 
+    else if(overrideAllSpritesToEyeHue)
     {
-      return result;
+      _proceduralAnimation->SetOverrideAllSpritesToEyeHue();
     }
-
-    const u32 numLoops = 1;
-    const u32 startTime_ms = 0;
-    const bool interruptRunning = true;
-    const bool shouldOverrideEyeHue = false;
-    const bool isInternalAnim = false;
-    return SetStreamingAnimation(_proceduralAnimation, preserveTag, numLoops, startTime_ms, interruptRunning,
-                                 shouldOverrideEyeHue, shouldRenderInEyeHue, isInternalAnim);
-  }
-
-  Result AnimationStreamer::UpdateCompositeImage(Vision::LayerName layerName,
-                                                 const Vision::CompositeImageLayer::SpriteBox& spriteBox,
-                                                 Vision::SpriteName spriteName,
-                                                 u32 applyAt_ms)
-  {
-    if (_streamingAnimation != _proceduralAnimation) {
-      return Result::RESULT_FAIL;
-    }
-
-
-    auto& track = _streamingAnimation->GetTrack<SpriteSequenceKeyFrame>();
-    if(track.HasFramesLeft()){
-      auto& keyframe =  track.GetCurrentKeyFrame();
-      auto* spriteCache = _context->GetDataLoader()->GetSpriteCache();
-      auto* spriteSeqContainer = _context->GetDataLoader()->GetSpriteSequenceContainer();
-      SpriteSequenceKeyFrame::CompositeImageUpdateSpec spec(spriteCache,
-                                                            spriteSeqContainer,
-                                                            layerName,
-                                                            spriteBox,
-                                                            spriteName);
-
-      keyframe.QueueCompositeImageUpdate(std::move(spec), applyAt_ms);
-    }else{
-      LOG_WARNING("AnimationStreamer.UpdateCompositeImage.NoCompositeImage",
-                  "Keyframe does not have a composite image to update");
-    }
-
-
-    return Result::RESULT_FAIL;
+    return RESULT_OK;
   }
 
   void AnimationStreamer::Abort(Tag tag, bool shouldClearProceduralAnim)
@@ -1001,6 +879,8 @@ namespace Vector {
       if ((_streamingAnimation == _proceduralAnimation) &&
           shouldClearProceduralAnim) {
         _proceduralAnimation->Clear();
+      } else {
+        _streamingAnimation->ClearOverrides();
       }
 
       // Reset animation pointer
@@ -1010,31 +890,28 @@ namespace Vector {
       _wasAnimationInterruptedWithNothing = true;
     }
     _relativeStreamTime_ms = 0;
-    _expectingCompositeImage = false;
+    _lockFaceTrackAtEndOfStreamingAnimation = false;
   } // Abort()
 
 
 
   Result AnimationStreamer::InitStreamingAnimation(Tag withTag, u32 startAt_ms,
-                                                   bool shouldOverrideEyeHue, bool shouldRenderInEyeHue)
+                                                   bool overrideAllSpritesToEyeHue)
   {
     // Perform new animation callbacks
-    for (const auto& callback: _newAnimationCallbacks) {
+    for (const auto& callback: _newAnimationCallbacks)
+    {
       callback();
     }
-    
+
     kCurrentManualFrameNumber = 0;
     auto* spriteCache = _context->GetDataLoader()->GetSpriteCache();
     Result lastResult = _streamingAnimation->Init(spriteCache);
-    if(lastResult == RESULT_OK)
+    if (lastResult == RESULT_OK)
     {
-      // Only update should render in eye hue if not looping
-      if(shouldOverrideEyeHue){
-        auto& spriteTrack = _streamingAnimation->GetTrack<SpriteSequenceKeyFrame>();
-        std::list<SpriteSequenceKeyFrame>& allKeyframes = spriteTrack.GetAllKeyframes();
-        for(auto& frame: allKeyframes){
-          frame.OverrideShouldRenderInEyeHue(shouldRenderInEyeHue);
-        }
+      if (overrideAllSpritesToEyeHue)
+      {
+        _streamingAnimation->SetOverrideAllSpritesToEyeHue();
       }
 
       _tag = withTag;
@@ -1050,12 +927,14 @@ namespace Vector {
       // this will need to be addressed across the entire keepalive system
       _proceduralTrackComponent->RemoveKeepFaceAlive(_relativeStreamTime_ms, (3 * ANIM_TIME_STEP_MS));
 
-      if (!s_enableKeepFaceAlive){
+      if (!s_enableKeepFaceAlive)
+      {
         // If the animation doesn't have a procedural face track, and Face Keep-alive is false (i.e.,
         // the "last procedural face should persist") then the last procedural face should be blank.
         // Set the last procedural face to blank
         auto& faceTrack = _streamingAnimation->GetTrack<ProceduralFaceKeyFrame>();
-        if(faceTrack.IsEmpty()){
+        if (faceTrack.IsEmpty())
+        {
           _proceduralTrackComponent->SetLastProceduralFaceAsBlank();
         }
       }
@@ -1071,12 +950,16 @@ namespace Vector {
   bool AnimationStreamer::SendIfTrackUnlocked(RobotInterface::EngineToRobot*& msg, AnimTrackFlag track)
   {
     bool res = false;
-    if(msg != nullptr) {
-      if (!IsTrackLocked(_lockedTracks, (u8)track)) {
-        switch(track) {
+    if (msg != nullptr)
+    {
+      if (!IsTrackLocked(_lockedTracks, (u8)track))
+      {
+        switch(track)
+        {
           case AnimTrackFlag::BACKPACK_LIGHTS_TRACK:
           {
-            if (!kEnableBackpackLightsTrack) {
+            if (!kEnableBackpackLightsTrack)
+            {
               break;
             } // else fall through
           }
@@ -1097,55 +980,18 @@ namespace Vector {
     return res;
   }
 
-  void AnimationStreamer::SetParam(KeepFaceAliveParameter whichParam, float newValue)
+  void AnimationStreamer::GetStreamableFace(const Anim::AnimContext* context, const ProceduralFace& procFace, Vision::ImageRGB565& outImage)
   {
-    switch(whichParam) {
-      case KeepFaceAliveParameter::BlinkSpacingMaxTime_ms:
-      {
-        const auto maxSpacing_ms = _proceduralTrackComponent->GetMaxBlinkSpacingTimeForScreenProtection_ms();
-        if( newValue > maxSpacing_ms)
-        {
-          LOG_WARNING("AnimationStreamer.SetParam.MaxBlinkSpacingTooLong",
-                      "Clamping max blink spacing to %dms to avoid screen burn-in",
-                      maxSpacing_ms);
-
-          newValue = maxSpacing_ms;
-        }
-        // intentional fall through
-      }
-      case KeepFaceAliveParameter::BlinkSpacingMinTime_ms:
-      case KeepFaceAliveParameter::EyeDartMinDuration_ms:
-      case KeepFaceAliveParameter::EyeDartMaxDuration_ms:
-      case KeepFaceAliveParameter::EyeDartSpacingMinTime_ms:
-      case KeepFaceAliveParameter::EyeDartSpacingMaxTime_ms:
-      {
-        if ((_keepFaceAliveParams[whichParam] != newValue) &&
-            IsKeepAlivePlaying()) {
-          _relativeStreamTime_ms = 0;
-        }
-        break;
-      }
-      default:
-        break;
-    }
-
-    _keepFaceAliveParams[whichParam] = newValue;
-    LOG_DEBUG("AnimationStreamer.SetParam", "%s : %f",
-              EnumToString(whichParam), newValue);
-  }
-
-
-  void AnimationStreamer::GetStreamableFace(const AnimContext* context, const ProceduralFace& procFace, Vision::ImageRGB565& outImage)
-  {
-    if(kProcFace_Display == (int)FaceDisplayType::Test)
+    ANKI_CPU_PROFILE("AnimationStreamer::GetStreamableFace");
+    if (kProcFace_Display == (int)FaceDisplayType::Test)
     {
       // Display three color strips increasing in brightness from left to right
-      for(int i=0; i<FACE_DISPLAY_HEIGHT/3; ++i)
+      for (int i = 0; i < FACE_DISPLAY_HEIGHT / 3; ++i)
       {
         Vision::PixelRGB565* red_i   = outImage.GetRow(i);
-        Vision::PixelRGB565* green_i = outImage.GetRow(i + FACE_DISPLAY_HEIGHT/3);
-        Vision::PixelRGB565* blue_i  = outImage.GetRow(i + 2*FACE_DISPLAY_HEIGHT/3);
-        for(int j=0; j<FACE_DISPLAY_WIDTH; ++j)
+        Vision::PixelRGB565* green_i = outImage.GetRow(i + FACE_DISPLAY_HEIGHT / 3);
+        Vision::PixelRGB565* blue_i  = outImage.GetRow(i + 2 * FACE_DISPLAY_HEIGHT / 3);
+        for (int j = 0; j < FACE_DISPLAY_WIDTH; ++j)
         {
           const u8 value = Util::numeric_cast_clamped<u8>(std::round((f32)j/(f32)FACE_DISPLAY_WIDTH * 255.f));
           red_i[j]   = Vision::PixelRGB565(value, 0, 0);
@@ -1154,12 +1000,18 @@ namespace Vector {
         }
       }
     }
+    else if (kProcFace_Display == (int)FaceDisplayType::FullWhite)
+    {
+      const Vision::PixelRGB565 white(255,255,255);
+      outImage.FillWith(white);
+    }
     else
     {
       DEV_ASSERT(context != nullptr, "AnimationStreamer.BufferFaceToSend.NoContext");
       DEV_ASSERT(context->GetRandom() != nullptr, "AnimationStreamer.BufferFaceToSend.NoRNGinContext");
 
-      if(s_faceDataReset) {
+      if (s_faceDataReset)
+      {
         s_faceDataOverride = s_faceDataBaseline = procFace;
         ProceduralFace::SetHue(ProceduralFace::DefaultHue);
 
@@ -1203,21 +1055,26 @@ namespace Vector {
         s_faceDataReset = false;
       }
 
-      if(kProcFace_Display == (int)FaceDisplayType::OverrideIndividually || kProcFace_Display == (int)FaceDisplayType::OverrideTogether) {
+      if (kProcFace_Display == (int)FaceDisplayType::OverrideIndividually || kProcFace_Display == (int)FaceDisplayType::OverrideTogether)
+      {
         // compare override face data with baseline, if different update the rendered face
 
         ProceduralFace newProcFace = procFace;
 
         // for each eye parameter
-        if(kProcFace_Display == (int)FaceDisplayType::OverrideTogether) {
+        if (kProcFace_Display == (int)FaceDisplayType::OverrideTogether)
+        {
           s_faceDataOverride.SetParameters(ProceduralFace::WhichEye::Right, s_faceDataOverride.GetParameters(ProceduralFace::WhichEye::Left));
         }
-        for(auto whichEye : {ProceduralFace::WhichEye::Left, ProceduralFace::WhichEye::Right}) {
-          for (std::underlying_type<ProceduralFace::Parameter>::type iParam=0;
+        for (auto whichEye : {ProceduralFace::WhichEye::Left, ProceduralFace::WhichEye::Right})
+        {
+          for (std::underlying_type<ProceduralFace::Parameter>::type iParam = 0;
                iParam < Util::EnumToUnderlying(ProceduralFace::Parameter::NumParameters);
-               ++iParam) {
-            if(s_faceDataOverride.GetParameter(whichEye, (ProceduralFace::Parameter)iParam) !=
-               s_faceDataBaseline.GetParameter(whichEye, (ProceduralFace::Parameter)iParam)) {
+               ++iParam)
+          {
+            if (s_faceDataOverride.GetParameter(whichEye, (ProceduralFace::Parameter)iParam) !=
+               s_faceDataBaseline.GetParameter(whichEye, (ProceduralFace::Parameter)iParam))
+            {
               newProcFace.SetParameter(whichEye,
                                        (ProceduralFace::Parameter)iParam,
                                        s_faceDataOverride.GetParameter(whichEye, (ProceduralFace::Parameter)iParam));
@@ -1226,23 +1083,29 @@ namespace Vector {
         }
 
         // for each face parameter
-        if(s_faceDataOverride.GetFaceAngle() != s_faceDataBaseline.GetFaceAngle()) {
+        if (s_faceDataOverride.GetFaceAngle() != s_faceDataBaseline.GetFaceAngle())
+        {
           newProcFace.SetFaceAngle(s_faceDataOverride.GetFaceAngle());
         }
-        if(s_faceDataOverride.GetFaceScale()[0] != s_faceDataBaseline.GetFaceScale()[0] ||
-           s_faceDataOverride.GetFaceScale()[1] != s_faceDataBaseline.GetFaceScale()[1]) {
+        if (s_faceDataOverride.GetFaceScale()[0] != s_faceDataBaseline.GetFaceScale()[0] ||
+           s_faceDataOverride.GetFaceScale()[1] != s_faceDataBaseline.GetFaceScale()[1])
+        {
           newProcFace.SetFaceScale(s_faceDataOverride.GetFaceScale());
         }
-        if(s_faceDataOverride.GetFacePosition()[0] != s_faceDataBaseline.GetFacePosition()[0] ||
-           s_faceDataOverride.GetFacePosition()[1] != s_faceDataBaseline.GetFacePosition()[1]) {
+        if (s_faceDataOverride.GetFacePosition()[0] != s_faceDataBaseline.GetFacePosition()[0] ||
+           s_faceDataOverride.GetFacePosition()[1] != s_faceDataBaseline.GetFacePosition()[1])
+        {
           newProcFace.SetFacePosition(s_faceDataOverride.GetFacePosition());
         }
-        if(s_faceDataOverride.GetScanlineOpacity() != s_faceDataBaseline.GetScanlineOpacity()) {
+        if (s_faceDataOverride.GetScanlineOpacity() != s_faceDataBaseline.GetScanlineOpacity())
+        {
           newProcFace.SetScanlineOpacity(s_faceDataOverride.GetScanlineOpacity());
         }
 
         ProceduralFaceDrawer::DrawFace(newProcFace, *context->GetRandom(), outImage);
-      } else {
+      }
+      else
+      {
         ProceduralFaceDrawer::DrawFace(procFace, *context->GetRandom(), outImage);
       }
     }
@@ -1274,7 +1137,8 @@ namespace Vector {
   }
   void AnimationStreamer::UpdateCaptureFace(const Vision::ImageRGB565& faceImg565)
   {
-    if(s_framesToCapture > 0) {
+    if (s_framesToCapture > 0)
+    {
       clock_t end = clock();
       int elapsed = (end - s_frameStart)/float(CLOCKS_PER_SEC);
       s_frameStart = end;
@@ -1282,10 +1146,10 @@ namespace Vector {
       Vision::ImageRGBA frame(FACE_DISPLAY_HEIGHT, FACE_DISPLAY_WIDTH);
       frame.SetFromRGB565(faceImg565);
 
-      if(s_tga != NULL) {
+      if (s_tga != NULL) {
         fwrite(frame.GetDataPointer(), sizeof(uint8_t), FACE_DISPLAY_WIDTH*FACE_DISPLAY_HEIGHT*4, s_tga);
       } else {
-        if(s_gifVersion == 1) {
+        if (s_gifVersion == 1) {
           jo_gif_frame(&s_gif1, (uint8_t*)frame.GetDataPointer(), 4, false);
         } else {
           GifWriteFrame(&s_gif2, (uint8_t*)frame.GetDataPointer(), FACE_DISPLAY_WIDTH, FACE_DISPLAY_HEIGHT, elapsed*100);
@@ -1293,11 +1157,11 @@ namespace Vector {
       }
 
       ++s_frame;
-      if(s_frame == s_framesToCapture) {
-        if(s_tga != NULL) {
+      if (s_frame == s_framesToCapture) {
+        if (s_tga != NULL) {
           fclose(s_tga);
         } else {
-          if(s_gifVersion == 1) {
+          if (s_gifVersion == 1) {
             jo_gif_end(&s_gif1);
           } else {
             GifEnd(&s_gif2);
@@ -1323,7 +1187,7 @@ namespace Vector {
     static int kProcFace_GammaType_old = (int)FaceGammaType::None;
     static f32 kProcFace_Gamma_old = -1.f;
 
-    if((kProcFace_GammaType != kProcFace_GammaType_old) || (kProcFace_Gamma_old != kProcFace_Gamma)) {
+    if ((kProcFace_GammaType != kProcFace_GammaType_old) || (kProcFace_Gamma_old != kProcFace_Gamma)) {
       switch(kProcFace_GammaType) {
       case (int)FaceGammaType::FromLinear:
         for (int i = 0; i < 256; i++) {
@@ -1351,19 +1215,21 @@ namespace Vector {
       kProcFace_Gamma_old = kProcFace_Gamma;
     }
 
-    if(kProcFace_GammaType != (int)FaceGammaType::None) {
+    if (kProcFace_GammaType != (int)FaceGammaType::None)
+    {
       int nrows = faceImg565.GetNumRows();
       int ncols = faceImg565.GetNumCols();
-      if(faceImg565.IsContinuous())
+      if (faceImg565.IsContinuous())
       {
         ncols *= nrows;
         nrows = 1;
       }
 
-      for(int i=0; i<nrows; ++i)
+      for (int i = 0; i < nrows; ++i)
       {
         Vision::PixelRGB565* img_i = faceImg565.GetRow(i);
-        for(int j=0; j<ncols; ++j) {
+        for (int j = 0; j < ncols; ++j)
+        {
           img_i[j].SetValue(Vision::PixelRGB565(s_gammaLUT[0][img_i[j].r()], s_gammaLUT[1][img_i[j].g()], s_gammaLUT[2][img_i[j].b()]).GetValue());
         }
       }
@@ -1400,7 +1266,8 @@ namespace Vector {
     {
       OSState::MemoryInfo info;
       OSState::getInstance()->GetMemoryInfo(info);
-      if (info.alert > OSState::Alert::None) {
+      if (info.alert > OSState::Alert::None)
+      {
         const ColorRGBA& memAlertColor = (info.alert >= OSState::Alert::Red ? NamedColors::RED : NamedColors::YELLOW);
         const Rectangle<s32> rect(FACE_DISPLAY_WIDTH-30, 0, 30, 25);
         faceImg565.DrawFilledRect(rect, memAlertColor);
@@ -1412,7 +1279,8 @@ namespace Vector {
 
 #endif // ANKI_DEV_CHEATS
 
-    if(SHOULD_SEND_DISPLAYED_FACE_TO_ENGINE){
+    if (SHOULD_SEND_DISPLAYED_FACE_TO_ENGINE)
+    {
       // Send the final buffered face back over to engine
       ASSERT_NAMED(faceImg565.IsContinuous(), "AnimationComponent.DisplayFaceImage.NotContinuous");
       static int imageID = 0;
@@ -1421,7 +1289,8 @@ namespace Vector {
       int chunkCount = 0;
       int pixelsLeftToSend = FACE_DISPLAY_NUM_PIXELS;
       const u16* startIt = faceImg565.GetRawDataPointer();
-      while (pixelsLeftToSend > 0) {
+      while (pixelsLeftToSend > 0)
+      {
         RobotInterface::DisplayedFaceImageRGBChunk msg;
         msg.imageId = imageID;
         msg.chunkIndex = chunkCount++;
@@ -1439,7 +1308,8 @@ namespace Vector {
       DEV_ASSERT_MSG(chunkCount == kExpectedNumChunks, "AnimationComponent.DisplayFaceImage.UnexpectedNumChunks", "%d", chunkCount);
     }
 
-    if(kShouldDisplayPlaybackTime){
+    if (kShouldDisplayPlaybackTime)
+    {
       // Build display str secs:ms
       const auto secs = _relativeStreamTime_ms/1000;
       const auto ms = _relativeStreamTime_ms % 1000;
@@ -1450,7 +1320,8 @@ namespace Vector {
       const auto timeDrift = estimatedRealTime - _relativeStreamTime_ms;
 
       ColorRGBA color = NamedColors::GREEN;
-      if(timeDrift > (2*ANIM_TIME_STEP_MS) ){
+      if (timeDrift > (2 * ANIM_TIME_STEP_MS))
+      {
         color = NamedColors::RED;
 
         const auto realSecs = estimatedRealTime/1000;
@@ -1494,7 +1365,8 @@ namespace Vector {
     DEV_ASSERT(_streamingAnimation != nullptr, "AnimationStreamer.SendStartOfAnimation.NullAnim");
     const std::string& streamingAnimName = _streamingAnimation->GetName();
 
-    if(DEBUG_ANIMATION_STREAMING) {
+    if (DEBUG_ANIMATION_STREAMING)
+    {
       LOG_DEBUG("AnimationStreamer.SendStartOfAnimation", "Tag=%d, Name=%s, loopCtr=%d",
                 _tag, streamingAnimName.c_str(), _loopCtr);
     }
@@ -1516,7 +1388,8 @@ namespace Vector {
     _startOfAnimationSent = true;
     _endOfAnimationSent = false;
 
-    if( ANKI_DEV_CHEATS ) {
+    if (ANKI_DEV_CHEATS)
+    {
       SendAnimationToWebViz( true );
     }
 
@@ -1531,7 +1404,8 @@ namespace Vector {
     DEV_ASSERT(_streamingAnimation != nullptr, "AnimationStreamer.SendStartOfAnimation.NullAnim");
     const std::string& streamingAnimName = _streamingAnimation->GetName();
 
-    if(DEBUG_ANIMATION_STREAMING) {
+    if (DEBUG_ANIMATION_STREAMING)
+    {
       LOG_INFO("AnimationStreamer.SendEndOfAnimation", "Tag=%d, Name=%s, t=%dms, loopCtr=%d, numLoops=%d",
                _tag, streamingAnimName.c_str(), _relativeStreamTime_ms, _loopCtr, _numLoops);
     }
@@ -1555,7 +1429,8 @@ namespace Vector {
     _endOfAnimationSent = true;
     _startOfAnimationSent = false;
 
-    if( ANKI_DEV_CHEATS ) {
+    if (ANKI_DEV_CHEATS)
+    {
       SendAnimationToWebViz( false );
     }
 
@@ -1566,19 +1441,23 @@ namespace Vector {
   } // SendEndOfAnimation()
 
 
-  Result AnimationStreamer::ExtractMessagesFromProceduralTracks(AnimationMessageWrapper& stateToSend) const
+  // TODO(str): VIC-13519 Linearize Face Rendering 
+  // This side-loop of rendering logic is a workaround used only if there is no running animation. It
+  // should be possible to remove this given a more linear, single-image rendering pipeline. 
+  Result AnimationStreamer::ExtractMessagesFromProceduralTracks(AnimationMessageWrapper& stateToSend)
   {
     Result lastResult = RESULT_OK;
 
     // We don't have an animation but we still have procedural layers to so
     // apply them
-    if(_proceduralTrackComponent->HaveLayersToSend())
+    if (_proceduralTrackComponent->HaveLayersToSend())
     {
       // Lock the face track if it's not time for a new procedural face
       u8 lockedTracks = _lockedTracks;
       const bool isFaceTrackAlreadyLocked = IsTrackLocked(lockedTracks, (u8)AnimTrackFlag::FACE_TRACK);
       const bool isTimeForProceduralFace = BaseStationTimer::getInstance()->GetCurrentTimeStamp() >= _nextProceduralFaceAllowedTime_ms;
-      if(!isFaceTrackAlreadyLocked && !isTimeForProceduralFace){
+      if (!isFaceTrackAlreadyLocked && !isTimeForProceduralFace)
+      {
         lockedTracks |= (u8)AnimTrackFlag::FACE_TRACK;
       }
 
@@ -1593,9 +1472,11 @@ namespace Vector {
 
   Result AnimationStreamer::ExtractMessagesFromStreamingAnim(AnimationMessageWrapper& stateToSend)
   {
+    ANKI_CPU_PROFILE("AnimationStreamer::ExtractMessagesFromStreamingAnim");
     Result lastResult = RESULT_OK;
 
-    if(!_streamingAnimation->IsInitialized()) {
+    if (!_streamingAnimation->IsInitialized())
+    {
       LOG_ERROR("Animation.Update", "%s: Animation must be initialized before it can be played/updated.",
                 _streamingAnimation != nullptr ? _streamingAnimation->GetName().c_str() : "<NULL>");
       return RESULT_FAIL;
@@ -1606,18 +1487,14 @@ namespace Vector {
       return RESULT_OK;
     }
 
-    // TEMP (Kevin K.): We're waiting on messages that have been delayed - don't start
-    // the animation yet
-    if(_expectingCompositeImage){
-      return RESULT_OK;
-    }
-
-    if(!_startOfAnimationSent) {
+    if (!_startOfAnimationSent)
+    {
       SendStartOfAnimation();
       _animAudioClient->InitAnimation();
     }
 
-    if(DEBUG_ANIMATION_STREAMING) {
+    if (DEBUG_ANIMATION_STREAMING)
+    {
       // Very verbose!
       //LOG_INFO("Animation.Update", "%d bytes left to send this Update.",
       //         umBytesToSend);
@@ -1653,94 +1530,107 @@ namespace Vector {
       }
     }
 
+    // TODO(str): VIC-13519 Linearize Face Rendering 
+    // The remainder of this logic is not "ExtractingMessagesFromStreamingAnimation"... this is confusing.
+    // This logic could/should be moved up to Update so that building the desired animation is a visibly linear
+    // process instead of burying procedural content under canned animation oriented function calls.
     // Apply any track layers to the animation
-    const bool storeFace = true;
+    static const bool kStoreFace = true;
     ExtractMessagesRelatedToProceduralTrackComponent(_context, _streamingAnimation, _proceduralTrackComponent.get(),
-                                                     _lockedTracks, _relativeStreamTime_ms, storeFace, stateToSend);
-
-
-    auto & spriteSeqTrack    = _streamingAnimation->GetTrack<SpriteSequenceKeyFrame>();
-    if(ShouldRenderSpriteTrack(spriteSeqTrack, _lockedTracks, _relativeStreamTime_ms, false)){
-      const AnimTimeStamp_t currTime_ms = BaseStationTimer::getInstance()->GetCurrentTimeStamp();
-      _nextProceduralFaceAllowedTime_ms = currTime_ms + kMinTimeBetweenLastNonProcFaceAndNextProcFace_ms;
-    }
+                                                     _lockedTracks, _relativeStreamTime_ms, kStoreFace, stateToSend);
 
     return lastResult;
   } // ExtractMessagesFromStreamingAnim()
 
 
-  Result AnimationStreamer::ExtractMessagesRelatedToProceduralTrackComponent(const AnimContext* context,
+  Result AnimationStreamer::ExtractMessagesRelatedToProceduralTrackComponent(const Anim::AnimContext* context,
                                                                              Animation* anim,
                                                                              TrackLayerComponent* trackComp,
                                                                              const u8 tracksCurrentlyLocked,
                                                                              const TimeStamp_t timeSinceAnimStart_ms,
-                                                                             bool storeFace,
+                                                                             const bool storeFace,
                                                                              AnimationMessageWrapper& stateToSend)
   {
+    ANKI_CPU_PROFILE("AnimationStreamer::ExtractMessagesRelatedToProceduralTrackComponent");
+
     TrackLayerComponent::LayeredKeyFrames layeredKeyFrames;
     trackComp->ApplyLayersToAnim(anim,
                                  timeSinceAnimStart_ms,
                                  layeredKeyFrames,
                                  storeFace);
 
-    if(layeredKeyFrames.haveBackpackKeyFrame &&
-       !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::BACKPACK_LIGHTS_TRACK))
+    if (layeredKeyFrames.haveBackpackKeyFrame &&
+        !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::BACKPACK_LIGHTS_TRACK))
     {
       stateToSend.backpackLightsMessage = layeredKeyFrames.backpackKeyFrame.GetStreamMessage(timeSinceAnimStart_ms);
     }
 
-    if(layeredKeyFrames.haveAudioKeyFrame &&
-       !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::AUDIO_TRACK))
+    if (layeredKeyFrames.haveAudioKeyFrame &&
+        !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::AUDIO_TRACK))
     {
       // TODO: Kevin K. - Avoid this copy w/ restructuring
       stateToSend.audioKeyFrameMessage = new RobotAudioKeyFrame(layeredKeyFrames.audioKeyFrame);
     }
 
-    bool needToRenderStreamable = !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::FACE_TRACK);
-    if(anim != nullptr){
-      auto & spriteSeqTrack = anim->GetTrack<SpriteSequenceKeyFrame>();
-      needToRenderStreamable &= layeredKeyFrames.haveFaceKeyFrame &&
-                                ShouldRenderProceduralFace(spriteSeqTrack,
-                                                           tracksCurrentlyLocked,
-                                                           timeSinceAnimStart_ms);
+    // TODO(str): VIC-13519 Linearize Face Rendering 
+    // Again... it makes precious little sense to be handling all this face rendering logic at the bottom
+    // of a huge, apparently unrelated call stack. Takes forever to discover this stuff
+    // ----- Face Rendering Code -----
 
+    bool haveEyesToRender = layeredKeyFrames.haveFaceKeyFrame &&
+                            !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::FACE_TRACK);
+    
+
+    // Two conflicting refactors cause the eyes to be superimposed under the timer
+    // when it goes off. There should be a configuration option to set, but for now
+    // we do this hack for 1.7.0
+    if (anim != nullptr && anim->GetName() == "anim_timersup_beep_01" )
+    {
+      haveEyesToRender = false;
     }
 
-    if(needToRenderStreamable){
+    if (haveEyesToRender)
+    {
       GetStreamableFace(context, layeredKeyFrames.faceKeyFrame.GetFace(), stateToSend.faceImg);
       stateToSend.haveFaceToSend = true;
     }
 
-    if(anim != nullptr){
-      auto & spriteSeqTrack = anim->GetTrack<SpriteSequenceKeyFrame>();
-      if(ShouldRenderSpriteTrack(spriteSeqTrack, tracksCurrentlyLocked, timeSinceAnimStart_ms, needToRenderStreamable)){
-        auto & faceKeyFrame = spriteSeqTrack.GetCurrentKeyFrame();
+    if (anim != nullptr)
+    {
+      Vision::CompositeImage compImg(ProceduralFace::GetHueSatWrapper());
 
-        // Insert the procedural/streamable face into the composite anim if necessary
-        if(needToRenderStreamable){
-          auto& compImg = faceKeyFrame.GetCompositeImage();
+      // Get the data from the SpriteBoxCompositor
+      bool renderFromCompImage = anim->PopulateCompositeImage(*context->GetDataLoader()->GetSpriteCache(),
+                                                              *context->GetDataLoader()->GetSpriteSequenceContainer(),
+                                                              timeSinceAnimStart_ms, compImg);
+
+      if (renderFromCompImage)
+      {
+        if (haveEyesToRender)
+        {
+          // TODO(str): VIC-13519 Linearize Face Rendering 
+          // We should just always be overlaying the procedural face onto the comp image above after rendering
+          // the layers below the face layer, then finish rendering the rest of the layers in the image.
+          // Right now we waste a lot of optimization drawing the face image then copying it into the 
+          // CompImage, then pixel-by-pixel blitting it as a full-screen overlay from within the CompImage.
           InsertStreamableFaceIntoCompImg(stateToSend.faceImg, compImg);
         }
 
-        // Render and display the face
-        Vision::SpriteHandle handle;
-        const bool gotImage = faceKeyFrame.GetFaceImageHandle(timeSinceAnimStart_ms, handle);
-        if(gotImage){
-          Vision::HSImageHandle hsHandle = std::make_shared<Vision::HueSatWrapper>(0,0);
-          if(handle->IsContentCached(hsHandle).rgba){
-            const auto& imgRGB = handle->GetCachedSpriteContentsRGBA(hsHandle);
-            // Display the ImageRGB565 directly to the face, without modification
-            stateToSend.faceImg.SetFromImageRGB(imgRGB);
-          }else{
-            auto imgRGB = handle->GetSpriteContentsRGBA(hsHandle);
-            // Display the ImageRGB565 directly to the face, without modification
-            stateToSend.faceImg.SetFromImageRGB(imgRGB);
-          }
+        Vision::ImageRGBA img(FACE_DISPLAY_HEIGHT, FACE_DISPLAY_WIDTH);
+        compImg.DrawIntoImage(img);
+        stateToSend.faceImg.SetFromImageRGB(img);
 
-          stateToSend.haveFaceToSend = true;
-        }
+        stateToSend.haveFaceToSend = true;
+      }
+
+      if(renderFromCompImage || haveEyesToRender)
+      {
+        const AnimTimeStamp_t currTime_ms = BaseStationTimer::getInstance()->GetCurrentTimeStamp();
+        _nextProceduralFaceAllowedTime_ms = currTime_ms + kMinTimeBetweenLastNonProcFaceAndNextProcFace_ms;
       }
     }
+
+    // ----- Face Rendering Code -----
 
     return RESULT_OK;
   }
@@ -1748,24 +1638,25 @@ namespace Vector {
 
   Result AnimationStreamer::ExtractAnimationMessages(AnimationMessageWrapper& stateToSend)
   {
-    ANKI_CPU_PROFILE("AnimationStreamer::Update");
     Result lastResult = RESULT_OK;
 
     bool streamUpdated = false;
 
-    if(_streamingAnimation != nullptr) {
-
-      if(IsStreamingAnimFinished()) {
-
+    if (_streamingAnimation != nullptr)
+    {
+      if (IsStreamingAnimFinished())
+      {
         ++_loopCtr;
 
-        if(_numLoops == 0 || _loopCtr < _numLoops) {
-         if(DEBUG_ANIMATION_STREAMING) {
-           LOG_INFO("AnimationStreamer.Update.Looping",
+        if (_numLoops == 0 || _loopCtr < _numLoops)
+        {
+          if (DEBUG_ANIMATION_STREAMING)
+          {
+            LOG_INFO("AnimationStreamer.Update.Looping",
                     "Finished loop %d of %d of '%s' animation. Restarting.",
                     _loopCtr, _numLoops,
                     _streamingAnimation->GetName().c_str());
-         }
+          }
 
           // Reset the animation so it can be played again:
           InitStreamingAnimation(_tag);
@@ -1774,42 +1665,56 @@ namespace Vector {
           // To avoid streaming faceLayers set true and start streaming animation next Update() tick.
           streamUpdated = true;
         }
-        else {
-          if(DEBUG_ANIMATION_STREAMING) {
+        else
+        {
+          if (DEBUG_ANIMATION_STREAMING)
+          {
             LOG_INFO("AnimationStreamer.Update.FinishedStreaming",
                      "Finished streaming '%s' animation.",
                      _streamingAnimation->GetName().c_str());
           }
 
+          if (_streamingAnimation == _proceduralAnimation)
+          {
+            _proceduralAnimation->Clear();
+          } else {
+            _streamingAnimation->ClearOverrides();
+          }
+
           _streamingAnimation = nullptr;
         }
 
-      } // if(IsStreamingAnimFinished())
-      else {
+      } // if (IsStreamingAnimFinished())
+      else
+      {
         // We do want to store this face to the robot since it's coming from an actual animation
         lastResult = ExtractMessagesFromStreamingAnim(stateToSend);
         streamUpdated = true;
         _lastAnimationStreamTime = BaseStationTimer::getInstance()->GetCurrentTimeInSeconds();
         // Send an end-of-animation keyframe when done
-        if( !_streamingAnimation->HasFramesLeft() &&
+        if (!_streamingAnimation->HasFramesLeft() &&
             _relativeStreamTime_ms >= _streamingAnimation->GetLastKeyFrameEndTime_ms() &&
             _startOfAnimationSent &&
             !_endOfAnimationSent)
         {
           StopTracksInUse(false);
           lastResult = SendEndOfAnimation();
-          if (_animAudioClient->HasActiveEvents()) {
+          if(_lockFaceTrackAtEndOfStreamingAnimation){
+            LockTrack(AnimTrackFlag::FACE_TRACK);
+            _lockFaceTrackAtEndOfStreamingAnimation = false;
+          }
+          if (_animAudioClient->HasActiveEvents())
+          {
             LOG_WARNING("AnimationStreamer.ExtractMessagesFromStreamingAnim.EndOfAnimation.ActiveAudioEvent",
                         "AnimName: '%s'", _streamingAnimation->GetName().c_str());
           }
         }
       }
-
-    } // if(_streamingAnimation != nullptr)
+    } // if (_streamingAnimation != nullptr)
 
 
     // If we didn't do any streaming above, but we've still got layers to stream
-    if(!streamUpdated)
+    if (!streamUpdated)
     {
       lastResult = ExtractMessagesFromProceduralTracks(stateToSend);
     }
@@ -1829,24 +1734,24 @@ namespace Vector {
     const bool haveStreamingAnimation = _streamingAnimation != nullptr;
     const bool haveStreamedAnything   = _lastAnimationStreamTime > 0.f;
     const bool longEnoughSinceStream  = (BaseStationTimer::getInstance()->GetCurrentTimeInSeconds() - _lastAnimationStreamTime) > _longEnoughSinceLastStreamTimeout_s;
-
-    if(!haveStreamingAnimation &&
-       haveStreamedAnything &&
-       longEnoughSinceStream)
+    if (!haveStreamingAnimation &&
+         haveStreamedAnything &&
+         longEnoughSinceStream)
     {
-      if(!FACTORY_TEST)
+      if (!FACTORY_TEST)
       {
-        if(s_enableKeepFaceAlive)
+        if (s_enableKeepFaceAlive)
         {
           // If we were interrupted from streaming an animation and we've met all the
           // conditions to even be in this function, then we should make sure we've
           // got neutral face back on the screen
-          if(_wasAnimationInterruptedWithNothing) {
+          if (_wasAnimationInterruptedWithNothing)
+          {
             SetStreamingAnimation(_neutralFaceAnimation, kNotAnimatingTag);
             _wasAnimationInterruptedWithNothing = false;
           }
 
-          _proceduralTrackComponent->KeepFaceAlive(_keepFaceAliveParams, _relativeStreamTime_ms);
+          _proceduralTrackComponent->KeepFaceAlive(_relativeStreamTime_ms);
         }
         else
         {
@@ -1855,7 +1760,8 @@ namespace Vector {
       }
       else
       {
-        if(_wasAnimationInterruptedWithNothing) {
+        if (_wasAnimationInterruptedWithNothing)
+        {
           SetStreamingAnimation(_neutralFaceAnimation, kNotAnimatingTag);
           _wasAnimationInterruptedWithNothing = false;
         }
@@ -1872,17 +1778,20 @@ namespace Vector {
 
   Result AnimationStreamer::Update()
   {
+    _numLayersRendered = 0;
+
     {
       std::lock_guard<std::mutex> lock(_pendingAnimationMutex);
       if (!_pendingAnimation.empty()) {
-        SetStreamingAnimation(_pendingAnimation, /*tag*/ 1, _pendingNumLoops, /*interruptRunning*/ true);
+        SetStreamingAnimation(_pendingAnimation, /*tag*/ 1, _pendingNumLoops, 0, /*interruptRunning*/ true);
 
         _pendingAnimation.clear();
         _pendingNumLoops = 0;
       }
     }
 
-    if(kIsInManualUpdateMode){
+    if (kIsInManualUpdateMode)
+    {
       _relativeStreamTime_ms = kCurrentManualFrameNumber * ANIM_TIME_STEP_MS;
     }
 
@@ -1893,45 +1802,54 @@ namespace Vector {
     // Make sure the proceduralTrackLayers and streaming animation
     // are advanced to the appropriate keyframe
     _proceduralTrackComponent->AdvanceTracks(_relativeStreamTime_ms);
-    if(_streamingAnimation != nullptr){
+    if (_streamingAnimation != nullptr)
+    {
       _streamingAnimation->AdvanceTracks(_relativeStreamTime_ms);
 
       // Procedural animation is not presistent
-      if(_streamingAnimation == _proceduralAnimation){
+      if (_streamingAnimation == _proceduralAnimation)
+      {
         _proceduralAnimation->ClearUpToCurrent();
       }
     }
 
-    if(!kIsInManualUpdateMode){
-
+    if (!kIsInManualUpdateMode)
+    {
       // Check to see if we're not streaming anything and a keep alive should take over
       SetKeepAliveIfAppropriate();
 
       // Get the data to send to the robot
       lastResult = ExtractAnimationMessages(messageWrapper);
 
-      if(_incrementTimeThisTick){
+      if (_incrementTimeThisTick)
+      {
         _relativeStreamTime_ms += ANIM_TIME_STEP_MS;
       }
       _incrementTimeThisTick = true;
 
-    }else if(_streamingAnimation != nullptr){
-      // TODO: Move this render process into the interpolator - should not be part of
-      // Animation streaming, but too large a change to make right now
-
-      const bool storeFace = true;
+    }
+    else if (_streamingAnimation != nullptr)
+    {
+      // TODO(str): VIC-13519 Linearize Face Rendering 
+      // IMHO Interpolation doesn't belong here. We already have a concept of tracks for 
+      // specialized KeyFrame handling, the tracks should be responsible for returning 
+      // appropriate content given a relativeStreamTime and interpolate internally.
+      // AnimationStreamer should not be concerned.
+      static const bool kStoreFace = true;
       ExtractMessagesRelatedToProceduralTrackComponent(_context,
                                                        _streamingAnimation,
                                                        _proceduralTrackComponent.get(),
                                                        _lockedTracks,
                                                        _relativeStreamTime_ms,
-                                                       storeFace,
+                                                       kStoreFace,
                                                        messageWrapper);
 
+      // AnimationInterpolator is unimplemented and does nothing at all in this call.
       AnimationInterpolator::GetInterpolationMessages(_streamingAnimation,
                                                       kCurrentManualFrameNumber,
                                                       messageWrapper);
-      if(kShouldDisplayKeyframeNumber && messageWrapper.haveFaceToSend){
+      if (kShouldDisplayKeyframeNumber && messageWrapper.haveFaceToSend)
+      {
         // Build display str secs:ms
         std::string frameNum = std::to_string(kCurrentManualFrameNumber);
 
@@ -1947,7 +1865,8 @@ namespace Vector {
     // A workaround to remove tracks that escaped through the engine process' track locking. This currently
     // happens only for composite weather animations and wake word animations, both of which bypass
     // action system's track locking.
-    if( _streamingAnimation != nullptr ) {
+    if (_streamingAnimation != nullptr)
+    {
       InvalidateBannedTracks(_streamingAnimation->GetName(), messageWrapper);
     }
 
@@ -1955,11 +1874,9 @@ namespace Vector {
     SendAnimationMessages(messageWrapper);
 
     // Send animState message
-    if (--_numTicsToSendAnimState == 0) {
-      const auto numKeyframes = _proceduralAnimation->GetTrack<SpriteSequenceKeyFrame>().TrackLength();
-
+    if (--_numTicsToSendAnimState == 0)
+    {
       AnimationState msg;
-      msg.numProcAnimFaceKeyframes = static_cast<uint32_t>(numKeyframes);
       msg.lockedTracks             = _lockedTracks;
       msg.tracksInUse              = _tracksInUse;
 
@@ -1970,12 +1887,18 @@ namespace Vector {
     return lastResult;
   } // AnimationStreamer::Update()
 
+
   void AnimationStreamer::EnableKeepFaceAlive(bool enable, u32 disableTimeout_ms)
   {
-    if (s_enableKeepFaceAlive && !enable) {
+    if (s_enableKeepFaceAlive && !enable)
+    {
       _proceduralTrackComponent->RemoveKeepFaceAlive(_relativeStreamTime_ms, disableTimeout_ms);
-    } else if (enable && !s_enableKeepFaceAlive) {
-      if (_wasAnimationInterruptedWithNothing) {
+
+    }
+    else if (enable && !s_enableKeepFaceAlive)
+    {
+      if (_wasAnimationInterruptedWithNothing)
+      {
         // The last animation ended without a replacement, but neutral eyes weren't inserted because
         // keepalive was disabled. Now that they're re-enabled, set the neutral eyes.
         SetStreamingAnimation(_neutralFaceAnimation, kNotAnimatingTag);
@@ -1984,20 +1907,10 @@ namespace Vector {
     }
     s_enableKeepFaceAlive = enable;
   }
-
-  void AnimationStreamer::SetDefaultKeepFaceAliveParams()
+  
+  void AnimationStreamer::SetKeepFaceAliveFocus(bool enable)
   {
-    LOG_DEBUG("AnimationStreamer.SetDefaultKeepFaceAliveParams", "");
-
-    for(auto param = Util::EnumToUnderlying(KeepFaceAliveParameter::BlinkSpacingMinTime_ms);
-        param != Util::EnumToUnderlying(KeepFaceAliveParameter::NumParameters); ++param) {
-      SetParamToDefault(static_cast<KeepFaceAliveParameter>(param));
-    }
-  } // SetDefaultKeepFaceAliveParams()
-
-  void AnimationStreamer::SetParamToDefault(KeepFaceAliveParameter whichParam)
-  {
-    SetParam(whichParam, _kDefaultKeepFaceAliveParams.at(whichParam));
+    _proceduralTrackComponent->SetKeepFaceAliveFocus(enable);
   }
 
   const std::string AnimationStreamer::GetStreamingAnimationName() const
@@ -2056,23 +1969,23 @@ namespace Vector {
 
   void AnimationStreamer::StopTracks(const u8 whichTracks)
   {
-    if(whichTracks)
+    if (whichTracks)
     {
-      if(whichTracks & (u8)AnimTrackFlag::HEAD_TRACK)
+      if (whichTracks & (u8)AnimTrackFlag::HEAD_TRACK)
       {
         RobotInterface::MoveHead msg;
         msg.speed_rad_per_sec = 0;
         RobotInterface::SendAnimToRobot(std::move(msg));
       }
 
-      if(whichTracks & (u8)AnimTrackFlag::LIFT_TRACK)
+      if (whichTracks & (u8)AnimTrackFlag::LIFT_TRACK)
       {
         RobotInterface::MoveLift msg;
         msg.speed_rad_per_sec = 0;
         RobotInterface::SendAnimToRobot(std::move(msg));
       }
 
-      if(whichTracks & (u8)AnimTrackFlag::BODY_TRACK)
+      if (whichTracks & (u8)AnimTrackFlag::BODY_TRACK)
       {
         RobotInterface::DriveWheels msg;
         msg.lwheel_speed_mmps = 0;
@@ -2087,7 +2000,8 @@ namespace Vector {
   }
 
   void AnimationStreamer::StopTracksInUse(bool aborting) {
-      if (!aborting) {
+      if (!aborting)
+      {
         // The anim has terminated normally so just let head and lift settle to final positions
         _tracksInUse &= ~((u8)AnimTrackFlag::LIFT_TRACK | (u8)AnimTrackFlag::HEAD_TRACK);
       }
@@ -2096,10 +2010,13 @@ namespace Vector {
 
   void AnimationStreamer::SendAnimationToWebViz( bool starting ) const
   {
-    if( _context != nullptr ) {
+    if (_context != nullptr)
+    {
       auto* webService = _context->GetWebService();
-      if( (webService != nullptr) && (_streamingAnimation != nullptr) ) {
-        if (webService->IsWebVizClientSubscribed(kWebVizModuleName)) {
+      if ((webService != nullptr) && (_streamingAnimation != nullptr))
+      {
+        if (webService->IsWebVizClientSubscribed(kWebVizModuleName))
+        {
           Json::Value data;
           data["type"] = starting ? "start" : "stop";
           data["animation"] = _streamingAnimation->GetName();
@@ -2112,95 +2029,52 @@ namespace Vector {
   void AnimationStreamer::CopyIntoProceduralAnimation(Animation* desiredAnim)
   {
     Util::SafeDelete(_proceduralAnimation);
-    if(desiredAnim != nullptr){
+    if (desiredAnim != nullptr)
+    {
       _proceduralAnimation = new Animation(*desiredAnim);
-    }else{
+    }
+    else
+    {
       _proceduralAnimation = new Animation();
     }
     _proceduralAnimation->SetName(EnumToString(AnimConstants::PROCEDURAL_ANIM));
   }
 
+  // TODO(str): VIC-13519 Linearize Face Rendering 
+  // This function should be replaced by directly rendering the procedural face. Treating it like a
+  // full-screen image here after its been built is very wasteful
   void AnimationStreamer::InsertStreamableFaceIntoCompImg(Vision::ImageRGB565& streamableFace,
                                                           Vision::CompositeImage& image)
   {
+    ANKI_CPU_PROFILE("AnimationStreamer::InsertStreamableFaceIntoCompImg");
     auto* rgbaImg = new Vision::ImageRGBA(streamableFace.GetNumRows(), streamableFace.GetNumCols());
     rgbaImg->SetFromRGB565(streamableFace);
     auto handle = std::make_shared<Vision::SpriteWrapper>(rgbaImg);
 
-    using namespace Vision;
-    using Entry = Vision::CompositeImageLayer::SpriteEntry;
+    static const float kEyeSpriteBoxAlpha = 100.0f;
+    static const uint16_t kEyeSpriteBoxXpos = 0;
+    static const uint16_t kEyeSpriteBoxYpos = 0;
+    static const uint8_t kEyeSpriteBoxPadding = 0;
+    static const Vision::SpriteBox kEyeSpriteBox {
+      kEyeSpriteBoxAlpha,
+      kEyeSpriteBoxXpos,
+      kEyeSpriteBoxYpos,
+      static_cast<int16_t>(FACE_DISPLAY_WIDTH),
+      static_cast<int16_t>(FACE_DISPLAY_HEIGHT),
+      Vision::SpriteBoxName::SpriteBox_40,
+      Vision::LayerName::Procedural_Eyes,
+      Vision::SpriteRenderMethod::RGBA,
+      kEyeSpriteBoxPadding
+    };
 
-    SpriteRenderConfig renderConfig;
-    renderConfig.renderMethod = SpriteRenderMethod::CustomHue;
-    // Set up sprite box layout
-    CompositeImageLayer::SpriteBox sb(SpriteBoxName::FaceKeyframe, renderConfig,
-                                      Point2i(0,0), FACE_DISPLAY_WIDTH, FACE_DISPLAY_HEIGHT);
-    CompositeImageLayer::LayoutMap map;
-    map.emplace(SpriteBoxName::FaceKeyframe, sb);
-    CompositeImageLayer eyeLayer(LayerName::Procedural_Eyes, std::move(map));
-
-    // set up image map for layer
-    SpriteSequence seq;
-    seq.AddFrame(handle);
-
-    CompositeImageLayer::ImageMap imageMap;
-    imageMap.emplace(SpriteBoxName::FaceKeyframe, Entry(std::move(seq)));
-    eyeLayer.SetImageMap(std::move(imageMap));
-
-    // add layer to comp image
-    image.AddLayer(std::move(eyeLayer));
-  }
-
-  bool AnimationStreamer::ShouldRenderProceduralFace(const Animations::Track<SpriteSequenceKeyFrame>& spriteTrack,
-                                                     const u8 tracksCurrentlyLocked,
-                                                     TimeStamp_t relativeStreamTime_ms)
-  {
-    const bool spriteSeqHasData = !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::FACE_TRACK) &&
-                                  spriteTrack.HasFramesLeft() &&
-                                  spriteTrack.GetCurrentKeyFrame().IsTimeToPlay(relativeStreamTime_ms);
-
-    bool newSpriteSeqData =  false;
-    bool allowEyeOverlays = false;
-    if(spriteSeqHasData){
-      auto& faceKeyFrame = spriteTrack.GetCurrentKeyFrame();
-      newSpriteSeqData = faceKeyFrame.NewImageContentAvailable(relativeStreamTime_ms);
-      allowEyeOverlays = faceKeyFrame.AllowProceduralEyeOverlays();
-    }
-
-    return !newSpriteSeqData || allowEyeOverlays;
-  }
-
-  bool AnimationStreamer::ShouldRenderSpriteTrack(const Animations::Track<SpriteSequenceKeyFrame>& spriteTrack,
-                                                  const u8 tracksCurrentlyLocked,
-                                                  TimeStamp_t relativeStreamTime_ms,
-                                                  const bool proceduralFaceRendered)
-  {
-    // Non-procedural faces (raw pixel data/images) take precedence over procedural faces (parameterized faces
-    // like idles, keep alive, or normal animated faces)
-    const bool spriteSeqHasData = !IsTrackLocked(tracksCurrentlyLocked, (u8)AnimTrackFlag::FACE_TRACK) &&
-                                  spriteTrack.HasFramesLeft() &&
-                                  spriteTrack.GetCurrentKeyFrame().IsTimeToPlay(relativeStreamTime_ms);
-
-    bool newSpriteSeqData =  false;
-    bool needToRenderFaceIntoCompositeImage = false;
-    if(spriteSeqHasData){
-      auto& faceKeyFrame = spriteTrack.GetCurrentKeyFrame();
-
-      newSpriteSeqData = faceKeyFrame.NewImageContentAvailable(relativeStreamTime_ms);
-      needToRenderFaceIntoCompositeImage = proceduralFaceRendered;
-    }
-    return newSpriteSeqData || needToRenderFaceIntoCompositeImage;
+    image.AddImage(kEyeSpriteBox, handle);
   }
 
   void AnimationStreamer::InvalidateBannedTracks(const std::string& animName,
                                                  AnimationMessageWrapper& messageWrapper) const
   {
-    const bool needToCheckWhitelist = _bodyWhiteListActive &&
+    const bool needToCheckWhitelist = _onCharger &&
                                       ((_lockedTracks & (u8)AnimTrackFlag::BODY_TRACK) == 0);
-    
-    if (!needToCheckWhitelist) {
-      return;
-    }
     
     // note: this duplicates engine's animation_whitelist.json, but hopefully InvalidateBannedTracks is removed soon
     //
@@ -2215,18 +2089,31 @@ namespace Vector {
     };
     
     bool animWhitelisted = false;
-    for (const auto& listEntry : whitelisted) {
-      if (Util::StringStartsWith(animName, listEntry)) {
-        animWhitelisted = true;
-        break;
+    if (needToCheckWhitelist) {
+      for (const auto& listEntry : whitelisted) {
+        if (Util::StringStartsWith(animName, listEntry)) {
+          animWhitelisted = true;
+          break;
+        }
       }
     }
-    
-    if (!animWhitelisted)
+
+    if (_onCharger && _frozenOnCharger)
+    {
+      // When on charger, don't move or play audio! (This could be alexa acoustic test mode)
+      // Don't lock tracks so as to not disturb any other functionality, simply drop the messages
+      // on the floor.
+      Anki::Util::SafeDelete(messageWrapper.bodyMotionMessage);
+      Anki::Util::SafeDelete(messageWrapper.moveLiftMessage);
+      Anki::Util::SafeDelete(messageWrapper.moveHeadMessage);
+      Anki::Util::SafeDelete(messageWrapper.audioKeyFrameMessage);
+    }
+    else if (needToCheckWhitelist && !animWhitelisted)
     {
       Anki::Util::SafeDelete(messageWrapper.bodyMotionMessage);
 
-      if( ANKI_DEV_CHEATS ) {
+      if (ANKI_DEV_CHEATS)
+      {
         // A list of known issues where animations are used without locking tracks on the charger
         static const std::set<std::string> knownIssues = {
           "anim_lookatphone_loop_01",
@@ -2235,7 +2122,8 @@ namespace Vector {
           "anim_avs_suddenspeak_03",
           "PROCEDURAL_ANIM",
         };
-        if(knownIssues.find(animName) == knownIssues.end()) {
+        if (knownIssues.find(animName) == knownIssues.end())
+        {
           LOG_WARNING("AnimationStreamer.InvalidateBannedTracks.UnknownIssue",
                       "Animation '%s' did not have its body track locked when on the charger",
                       animName.c_str());
@@ -2244,6 +2132,28 @@ namespace Vector {
     }
   }
 
+  void AnimationStreamer::SetFrozenOnCharger(bool enabled)
+  {
+    const bool wasFrozen = _onCharger && _frozenOnCharger;
+    _frozenOnCharger = enabled;
+    const bool isFrozen = _onCharger && _frozenOnCharger;
+    if (wasFrozen != isFrozen)
+    {
+      _proceduralTrackComponent->EnableProceduralAudio(!isFrozen);
+    }
+  }
 
+  void AnimationStreamer::SetOnCharger(bool onCharger)
+  {
+    const bool wasFrozen = _onCharger && _frozenOnCharger;
+    _onCharger = onCharger;
+    const bool isFrozen = _onCharger && _frozenOnCharger;
+    if (wasFrozen != isFrozen)
+    {
+      _proceduralTrackComponent->EnableProceduralAudio(!isFrozen);
+    }
+  }
+
+} // namespace Anim
 } // namespace Vector
 } // namespace Anki

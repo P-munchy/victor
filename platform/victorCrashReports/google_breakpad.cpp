@@ -46,6 +46,8 @@ std::string tmpDumpPath;
 static int fd = -1;
 static google_breakpad::ExceptionHandler* exceptionHandler;
 
+sighandler_t gSavedQuitHandler = nullptr;
+
 constexpr const char* kRobotVersionFile = "/anki/etc/version";
 constexpr const char* kDigits = "0123456789";
 
@@ -69,6 +71,31 @@ std::string GetDateTimeString()
   stringStream << formatTimeBuffer << std::setfill('0') << std::setw(3) << millisLeft.count();
 
   return stringStream.str();
+}
+
+//
+// Get path to magic crash report directory
+//
+const std::string & GetDumpDirectory()
+{
+  static const std::string dump_directory = "/data/data/com.anki.victor/cache/crashDumps";
+  return dump_directory;
+}
+
+//
+// Generate unique dump name for given prefix
+//
+std::string GetDumpName(const std::string & prefix)
+{
+  std::string buildVersion;
+  std::ifstream ifs(kRobotVersionFile);
+  ifs >> buildVersion;
+  const size_t lastDigitIndex = buildVersion.find_last_of(kDigits);
+  const size_t firstDigitIndex = buildVersion.find_last_not_of(kDigits, lastDigitIndex) + 1;
+  const size_t len = lastDigitIndex - firstDigitIndex + 1;
+  buildVersion = buildVersion.substr(firstDigitIndex, len);
+
+  return prefix + "-V" + buildVersion + "-" + GetDateTimeString() + ".dmp";
 }
 
 //
@@ -108,9 +135,6 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
     (void) close(fd); fd = -1;
   }
 
-  // Move dump file to upload path
-  rename(tmpDumpPath.c_str(), dumpPath.c_str());
-
   // Report the crash to DAS
   DASMSG(robot_crash, "robot.crash", "Robot service crash");
   DASMSG_SET(s1, dumpTag.c_str(), "Service name");
@@ -123,6 +147,9 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
   //
   sync();
 
+  // Move dump file to upload path
+  rename(tmpDumpPath.c_str(), dumpPath.c_str());
+
   // Capture recent log messages
   DumpLogMessages(dumpPath);
 
@@ -132,37 +159,40 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 
 } // anon namespace
 
+static void QuitHandler(int signum)
+{
+  if (exceptionHandler != nullptr) {
+    exceptionHandler->WriteMinidump();
+  }
+  signal(signum, gSavedQuitHandler);
+  raise(signum);
+}
 
 void InstallGoogleBreakpad(const char* filenamePrefix)
 {
-  const std::string & path = "/data/data/com.anki.victor/cache/crashDumps/";
-  Anki::Util::FileUtils::CreateDirectory(path);
-
-  std::string buildVersion;
-  std::ifstream ifs(kRobotVersionFile);
-  ifs >> buildVersion;
-  const size_t lastDigitIndex = buildVersion.find_last_of(kDigits);
-  const size_t firstDigitIndex = buildVersion.find_last_not_of(kDigits, lastDigitIndex) + 1;
-  const size_t len = lastDigitIndex - firstDigitIndex + 1;
-  buildVersion = buildVersion.substr(firstDigitIndex, len);
-  const std::string & crashTag = filenamePrefix;
-  const std::string & crashName = crashTag + "-V" + buildVersion +
-                                  "-" + GetDateTimeString() + ".dmp";
+  const std::string & dump_directory = GetDumpDirectory();
+  const std::string & dump_name = GetDumpName(filenamePrefix);
 
   // Save these strings for later
-  dumpTag     = crashTag;
-  dumpName    = crashName;
-  dumpPath    = path + crashName;
-  tmpDumpPath = path + crashName + "~";
+  dumpTag     = filenamePrefix;
+  dumpName    = dump_name;
+  dumpPath    = dump_directory + "/" + dump_name;
+  tmpDumpPath = dumpPath + "~";
+
+  Anki::Util::FileUtils::CreateDirectory(dump_directory);
 
   fd = open(tmpDumpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600);
   google_breakpad::MinidumpDescriptor descriptor(fd);
   descriptor.set_sanitize_stacks(true);
   exceptionHandler = new google_breakpad::ExceptionHandler(descriptor, NULL, DumpCallback, NULL, true, -1);
+
+  gSavedQuitHandler = signal(SIGQUIT, QuitHandler);
 }
 
 void UnInstallGoogleBreakpad()
 {
+  signal(SIGQUIT, gSavedQuitHandler);
+
   delete exceptionHandler;
   exceptionHandler = nullptr;
   if (fd >= 0) {
@@ -179,10 +209,56 @@ void UnInstallGoogleBreakpad()
   }
 }
 
+bool WriteMinidump(const std::string & prefix, std::string & out_dump_path)
+{
+  const std::string & dump_directory = GetDumpDirectory();
+  if (dump_directory.empty()) {
+    LOG_ERROR("GoogleBreakpad.WriteMinidump", "Unable to get dump directory");
+    return false;
+  }
+
+  const std::string & dump_name = GetDumpName(prefix);
+  if (dump_name.empty()) {
+    LOG_ERROR("GoogleBreakpad.WriteMinidump", "Unable to get dump name");
+    return false;
+  }
+
+  out_dump_path = dump_directory + "/" + dump_name;
+
+  // Create directory, if needed
+  Anki::Util::FileUtils::CreateDirectory(dump_directory);
+
+  // Open dump file
+  int fd = open(out_dump_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600);
+  if (fd < 0) {
+    LOG_ERROR("GoogleBreakpad.WriteMinidump", "Unable to open dump path %s (errno %d)", out_dump_path.c_str(), errno);
+    return false;
+  }
+
+  // Write the dump
+  google_breakpad::MinidumpDescriptor descriptor(fd);
+  descriptor.set_sanitize_stacks(true);
+
+  google_breakpad::ExceptionHandler handler(descriptor, nullptr, nullptr, nullptr, false, -1);
+
+  const bool ok = handler.WriteMinidump();
+  if (!ok) {
+    LOG_ERROR("GoogleBreakpad.WriteMinidump", "Unable to write minidump %s", out_dump_path.c_str());
+    close(fd);
+    return false;
+  }
+
+  // Clean up and we're done
+  close(fd);
+  return true;
+
+}
+
 #else
 
 void InstallGoogleBreakpad(const char *path) {}
 void UnInstallGoogleBreakpad() {}
+bool WriteMinidump(const std::string & prefix, std::string & out_dump_path) { return false; }
 
 #endif
 

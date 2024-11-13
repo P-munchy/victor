@@ -16,9 +16,9 @@
 #include "coretech/vision/robot/fiducialDetection.h"
 #include "coretech/vision/robot/fiducialMarkers.h"
 
-#include "coretech/common/engine/array2d_impl.h"
-#include "coretech/common/engine/math/quad_impl.h"
-#include "coretech/common/engine/math/rect_impl.h"
+#include "coretech/common/shared/array2d.h"
+#include "coretech/common/engine/math/quad.h"
+#include "coretech/common/shared/math/rect.h"
 
 #include "coretech/common/robot/array2d.h"
 
@@ -78,7 +78,7 @@ Result MarkerDetector::Memory::ResetBuffers(s32 numRows, s32 numCols, s32 maxMar
   //  _ccmBuffer.resize(CCM_BUFFER_MULTIPLIER * numPixels);
 
   static const s32 OFFCHIP_BUFFER_SIZE = 4000000;
-  static const s32 ONCHIP_BUFFER_SIZE  = 1600000;
+  static const s32 ONCHIP_BUFFER_SIZE  = 3200000; // Date: 02/10/2022 - Updated to resolve memory issue and handle images captured by new camera
   static const s32 CCM_BUFFER_SIZE     = 200000;
 
   _offchipBuffer.resize(OFFCHIP_BUFFER_SIZE);

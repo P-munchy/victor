@@ -5,11 +5,11 @@ endif(AVS_INCLUDED)
 set(AVS_INCLUDED true)
 
 if (VICOS)
-  set(LIBAVS_INCLUDE_PATH "${ANKI_EXTERNAL_DIR}/avs-device-sdk/vicos/include")
-  set(LIBAVS_LIB_PATH "${ANKI_EXTERNAL_DIR}/avs-device-sdk/vicos/lib")
+  set(LIBAVS_INCLUDE_PATH "${ANKI_THIRD_PARTY_DIR}/avs-device-sdk/vicos/include")
+  set(LIBAVS_LIB_PATH "${ANKI_THIRD_PARTY_DIR}/avs-device-sdk/vicos/lib")
 elseif (MACOSX)
-  set(LIBAVS_INCLUDE_PATH "${ANKI_EXTERNAL_DIR}/avs-device-sdk/mac/include")
-  set(LIBAVS_LIB_PATH "${ANKI_EXTERNAL_DIR}/avs-device-sdk/mac/lib")
+  set(LIBAVS_INCLUDE_PATH "${ANKI_THIRD_PARTY_DIR}/avs-device-sdk/mac/include")
+  set(LIBAVS_LIB_PATH "${ANKI_THIRD_PARTY_DIR}/avs-device-sdk/mac/lib")
 endif()
 
 
@@ -23,6 +23,8 @@ set(AVS_LIBS
   AudioResources
   AVSCommon
   AVSSystem
+  DeviceSettings
+  DoNotDisturbCA
   CapabilitiesDelegate
   CBLAuthDelegate
   CertifiedSender
@@ -35,6 +37,7 @@ set(AVS_LIBS
   RegistrationManager
   Settings
   SpeakerManager
+  SpeechEncoder
   SpeechSynthesizer
   SQLiteStorage
 )
@@ -54,19 +57,6 @@ foreach(LIB ${AVS_LIBS})
     "${LIBAVS_INCLUDE_PATH}")
   anki_build_target_license(${LIB} "Apache-2.0,${CMAKE_SOURCE_DIR}/licenses/avs-device-sdk.license" "curl,${CMAKE_SOURCE_DIR}/licenses/curl.license" "OpenSSL-SSLeay,${CMAKE_SOURCE_DIR}/licenses/openssl.license" "MIT,${CMAKE_SOURCE_DIR}/licenses/nghttp2.license")
 endforeach()
-
-if (VICOS)
-  # add SQLite
-  list(APPEND AVS_LIBS sqlite3)
-  add_library(sqlite3 SHARED IMPORTED)
-  set_target_properties(sqlite3 PROPERTIES
-    IMPORTED_LOCATION
-    "${LIBAVS_LIB_PATH}/libsqlite3.so.0"
-    INTERFACE_INCLUDE_DIRECTORIES
-    "${LIBAVS_INCLUDE_PATH}")
-  anki_build_target_license(sqlite3 "Public Domain,${CMAKE_SOURCE_DIR}/licenses/sqlite3.license")
-endif()
-
 
 #only needed for vicos
 if (TARGET copy_avs_libs)

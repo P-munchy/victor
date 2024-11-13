@@ -14,6 +14,7 @@
 #define __Engine_Behaviors_BehaviorGoHome_H__
 
 #include "engine/aiComponent/behaviorComponent/behaviors/iCozmoBehavior.h"
+#include "coretech/common/engine/robotTimeStamp.h"
 
 namespace Anki {
 namespace Vector {
@@ -37,7 +38,7 @@ public:
   
 protected:
   virtual void GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const override {
-    modifiers.visionModesForActiveScope->insert({ VisionMode::DetectingMarkers, EVisionUpdateFrequency::High });
+    modifiers.visionModesForActiveScope->insert({ VisionMode::Markers, EVisionUpdateFrequency::High });
     modifiers.wantsToBeActivatedWhenOnCharger = false;
     modifiers.wantsToBeActivatedWhenCarryingObject = true;
   }
@@ -74,15 +75,19 @@ private:
     std::shared_ptr<BehaviorClearChargerArea> clearChargerAreaBehavior;
     std::shared_ptr<BehaviorRequestToGoHome> requestHomeBehavior;
     std::shared_ptr<BehaviorWiggleOntoChargerContacts> wiggleOntoChargerBehavior;
+    ICozmoBehaviorPtr observeChargerBehavior;
   };
 
   struct DynamicVariables {
     DynamicVariables() {};
     ObjectID chargerID;
-    bool     drivingAnimsPushed = false;;
+    bool     drivingAnimsPushed = false;
     int      driveToRetryCount = 0;
     int      turnToDockRetryCount = 0;
     int      mountChargerRetryCount = 0;
+    
+    // Handle to the callback function registered in the VisionComponent
+    Signal::SmartHandle visionProcessingResultHandle;
     
     // For logging/DAS, keep track of whether we succeeded at getting onto the charger. Note that it's possible for the
     // behavior to end without a definite result (e.g. if it was interrupted). The result of HasSucceeded() is only
@@ -105,6 +110,9 @@ private:
   
   void TransitionToCheckDockingArea();
   void TransitionToPlacingCubeOnGround();
+  void TransitionToFaceCharger();
+  void TransitionToDriveToObservationPose(const bool canRetry);
+  void TransitionToPostObservation();
   void TransitionToObserveCharger();
   void TransitionToDriveToCharger();
   void TransitionToCheckPreTurnPosition();
@@ -112,12 +120,11 @@ private:
   void TransitionToMountCharger();
   void TransitionToPlayingNuzzleAnim();
   void TransitionToOnChargerCheck();
+  void TransitionToPostVisualVerification(const RobotTimeStamp_t verifyStartTime);
   
   // An action failed such that we must exit the behavior, or
   // we're out of retries for action failures.
-  // Optionally remove the charger from BlockWorld if we failed in
-  // such a way that we definitely don't know where the charger is
-  void ActionFailure(bool removeChargerFromBlockWorld = false);
+  void TransitionToFailureReaction();
   
   void PushDrivingAnims();
   void PopDrivingAnims();

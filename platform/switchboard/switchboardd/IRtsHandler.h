@@ -61,7 +61,7 @@ protected:
   , _tokenClient(tokenClient)
   , _hasOwner(hasOwner) {}
 
-  inline bool AssertState(RtsCommsType state) {
+  inline bool HasState(RtsCommsType state) {
     return state == _type;
   } 
 
@@ -70,6 +70,8 @@ protected:
   void SaveKeys() {
     (void) SavedSessionManager::SaveRtsKeys(_rtsKeys);
   }
+
+  const std::string& GetBuildIdString();
 
   std::unique_ptr<KeyExchange> _keyExchange;
 
@@ -81,6 +83,7 @@ protected:
   std::shared_ptr<TokenClient> _tokenClient;
   std::shared_ptr<WifiWatcher> _wifiWatcher;
   bool _hasOwner;
+  std::string _buildIdString;
 };
 
 } // Switchboard

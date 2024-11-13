@@ -16,7 +16,6 @@
 
 #include "clad/types/behaviorComponent/behaviorClasses.h"
 #include "clad/types/behaviorComponent/behaviorIDs.h"
-#include "clad/types/behaviorComponent/userIntent.h"
 #include "engine/aiComponent/behaviorComponent/behaviorSystemManager.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/iCozmoBehavior.h"
 #include "engine/aiComponent/behaviorComponent/userIntentComponent.h"
@@ -58,12 +57,7 @@ bool IntentHelper( const UserIntent& intent, BehaviorID behavior, bool onlyCheck
   const bool res = tif.TestUserIntentTransition(tbf, stack, intent, behavior, onlyCheckInStack );
   return res;
 }
-  
-bool PlaySpecificHelper( std::string entityBehavior, BehaviorID behavior, bool onlyCheckInStack = false )
-{
-  UserIntent intent( UserIntent_PlaySpecific{entityBehavior} );  
-  return IntentHelper( intent, behavior, onlyCheckInStack );
-}
+
 
 // keep_away was removed from entity_behavior_entries_en.json in April
 // (see https://github.com/anki/voice-intent-resolution-config/pull/33/files)
@@ -76,13 +70,13 @@ bool PlaySpecificHelper( std::string entityBehavior, BehaviorID behavior, bool o
 
 TEST_INTENT(UserIntentsTransitions, FistBump, "fist_bump")
 {
-  const bool res = PlaySpecificHelper( "fist_bump", BehaviorID::FistBumpVoiceCommand, true );
+  const bool res = IntentHelper( UserIntent::Createplay_fistbump({}), BehaviorID::FistBumpVoiceCommand, true );
   EXPECT_TRUE(res);
 }
   
 TEST_INTENT(UserIntentsTransitions, RollCube, "roll_cube")
 {
-  const bool res = PlaySpecificHelper( "roll_cube", BehaviorID::RollCubeVoiceCommand, true );
+  const bool res = IntentHelper( UserIntent::Createplay_rollcube({}), BehaviorID::RollCubeVoiceCommand, true );
   EXPECT_TRUE(res);
 }
 
@@ -98,11 +92,12 @@ TEST_INTENT(UserIntentsTransitions, LookAtMe, "imperative_lookatme")
   EXPECT_TRUE(res);
 }
 
-TEST_INTENT(UserIntentsTransitions, LookOverThere, "imperative_lookoverthere")
-{
-  const bool res = IntentHelper( UserIntent::Createimperative_lookoverthere({}), BehaviorID::LookOverThereVoiceCommand, true );
-  EXPECT_TRUE(res);
-}
+// commented out until the 'GazeDirection' feature is enabled in resources/config/features.json
+// TEST_INTENT(UserIntentsTransitions, LookOverThere, "imperative_lookoverthere")
+// {
+//   const bool res = IntentHelper( UserIntent::Createimperative_lookoverthere({}), BehaviorID::LookOverThereVoiceCommand, true );
+//   EXPECT_TRUE(res);
+// }
   
 TEST_INTENT(UserIntentsTransitions, WhatsMyName, "names_ask")
 {
@@ -140,7 +135,10 @@ TEST_INTENT(UserIntentsTransitions, Sleep, "system_sleep")
   EXPECT_TRUE(res);
 }
 
-// commented out until featureGate gets set to true
+// commented out for now to avoid this problem:
+// [Error] ActiveFeatureComponent.PossibleBug TELL BRAD: Feature 'VolumeAdjustment' is activating (old feature is NoFeature). No intent active, but one is pending.
+// [Error] TestIntentsFramework.IntentNotConsumed ASSERT ( ++tics < kMaxTicksToClear ): Intent 'imperative_volumelevel' is still pending after the tick limit
+//
 // TEST_INTENT(UserIntentsTransitions, VolumeLevel, "imperative_volumelevel")
 // {
 //   const bool res = IntentHelper( UserIntent::Createimperative_volumelevel( UserIntent_Volume("medium") ), BehaviorID::Volume, true );

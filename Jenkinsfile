@@ -8,29 +8,6 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurperClassic
 import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException
 
-@NonCPS
-def getListOfOnlineNodesForLabel(label) {
-  def nodes = []
-  jenkins.model.Jenkins.instance.computers.each { c ->
-    if (c.node.labelString.contains(label) && c.node.toComputer().isOnline()) {
-      nodes.add(c.node.selfLabel.name)
-    }
-  }
-  return nodes
-}
-
-@NonCPS
-def checkIfAgentsAreBusy() {
-    for (node in hudson.model.Hudson.instance.slaves) {
-        if (node.getLabelString() == 'victor-shipping') {
-            if (node.getComputer().countIdle() > 0) {
-                return false
-            }
-            return true
-        }
-    }
-}
-
 enum buildConfig {
     SHIPPING, DEBUG, RELEASE, MASTER
 
@@ -45,8 +22,13 @@ enum buildConfig {
     }
 }
 
+enabledBuildConfigs = [buildConfig.SHIPPING.getBuildType(), buildConfig.DEBUG.getBuildType(), buildConfig.RELEASE.getBuildType()]
+buildConfigMap = [:]
+
 def server = Artifactory.server 'artifactory-dev'
 library 'victor-helpers@master'
+@Library('static-libs@master')
+import com.anki.*
 
 primaryStageName = ''
 def vSphereServer = 'ankicore'
@@ -97,7 +79,7 @@ def jsonParsePayload(def json) {
     new groovy.json.JsonSlurperClassic().parseText(json)
 }
 
-def notifyBuildStatus(status) {
+def notifyBuildStatus(status, config) {
     def jobName = "${env.JOB_NAME}"
     jobName = jobName.getAt(0..(jobName.indexOf('/') - 1))
     def pullRequestURL = "https://github.com/anki/${jobName}/pull/${env.CHANGE_ID}"
@@ -115,7 +97,7 @@ def notifyBuildStatus(status) {
 
     notifySlack("", slackNotificationChannel, 
         [
-            title: "${jobName} ${primaryStageName} ${env.CHANGE_ID}, build #${env.BUILD_NUMBER}",
+            title: "${jobName} ${primaryStageName} ${env.CHANGE_ID} ${config}, build #${env.BUILD_NUMBER}",
             title_link: "${env.BUILD_URL}",
             color: slackColorMapping[status],
             text: "${status}\nAuthor: ${commitObj.commit.author.name} <${commitObj.commit.author.email}>",
@@ -139,7 +121,20 @@ def notifyBuildStatus(status) {
             ]
         ]
     )
-    
+    def commitStatusMsg = "PR #${env.CHANGE_ID} :: vicos ${config} :: Finished"
+    def statusMap = [msg: commitStatusMsg, result: status.toUpperCase(), sha: commitObj.sha, context: "ci/jenkins/pr/vicos/${config}"]
+    setGHBuildStatus(statusMap)
+}
+
+void setGHBuildStatus(Map statusFields) {
+  step([
+      $class: "GitHubCommitStatusSetter",
+      reposSource: [$class: "ManuallyEnteredRepositorySource", url: "https://github.com/anki/victor"],
+      commitShaSource: [$class: "ManuallyEnteredShaSource", sha: statusFields.sha],
+      contextSource: [$class: "ManuallyEnteredCommitContextSource", context: statusFields.context],
+      errorHandlers: [[$class: "ChangingBuildStatusErrorHandler", result: "UNSTABLE"]],
+      statusResultSource: [ $class: "ConditionalStatusResultSource", results: [[$class: "AnyBuildResult", message: statusFields.msg, state: statusFields.result]] ]
+  ]);
 }
 
 
@@ -168,7 +163,7 @@ class EphemeralAgent {
         ComputerLauncher launcher = new hudson.plugins.sshslaves.SSHLauncher(
             this.IPAddress, // Host
             22, // Port
-            "92b3994b-c270-4088-acc9-d85d6a2c7f50", // Credentials
+            "ankibuildssh", // Credentials
             (String)null, // JVM Options
             (String)null, // JavaPath
             (String)null, // Prefix Start Slave Command
@@ -185,7 +180,7 @@ class EphemeralAgent {
                 "/home/build/jenkins",
                 launcher)
         agent.nodeDescription = "dynamic build agent"
-        agent.numExecutors = 1
+        agent.numExecutors = 2
         agent.labelString = "reserved"
         agent.mode = Node.Mode.EXCLUSIVE
         agent.retentionStrategy = new RetentionStrategy.Always()
@@ -210,234 +205,38 @@ if (env.CHANGE_ID) {
 }
 
 stage("${primaryStageName} Build") {
-    /*
-    parallel debug: {
-        node('victor-slaves') {
-            withDockerEnv {
-                buildPRStepsVicOS type: buildConfig.DEBUG.getArtifactType()
-                sh 'mv _build/vicos/Debug _build/vicos/Release'
-                deployArtifacts type: buildConfig.DEBUG.getArtifactType(), artifactoryServer: server
-            }
-        }
-    },
-    shipping: {
-        node('victor-slaves') {
-            withDockerEnv {
-                buildPRStepsVicOS type: buildConfig.SHIPPING.getBuildType()
-                deployArtifacts type: buildConfig.SHIPPING.getArtifactType(), artifactoryServer: server
-            }
-        }
-    },
-    release: {
-        node('victor-slaves') {
-            withDockerEnv {
-                buildPRStepsVicOS type: buildConfig.RELEASE.getBuildType()
-                deployArtifacts type: buildConfig.RELEASE.getArtifactType(), artifactoryServer: server
-            }
-        }
-    },
-    macosx: {
-        def macBuildAgentsList = getListOfOnlineNodesForLabel('mac-slaves')
-        if (!macBuildAgentsList.isEmpty()) {
-            node('mac-slaves') {
-                withEnv(['PLATFORM=mac', 'CONFIGURATION=release']) {
-                    stage('Git Checkout') {
-                        checkout scm
-                        sh 'git submodule update --init --recursive'
-                        sh 'git submodule update --recursive'
+    try {
+        for (int i = 0; i < enabledBuildConfigs.size() ; i++) {
+            def buildFlavor = enabledBuildConfigs[i]
+            buildConfigMap[buildFlavor] = {
+                node('mac-slaves') {
+                    def ghsb = new GithubStatusMsgBuilder(this, buildFlavor)
+                    gitCheckout(true, true)
+                    try {
+                        ghsb.postBuildStart()
+                        buildPRStepsVicOS type: buildFlavor
+                        ghsb.postBuildFinished('SUCCESS')
+                        notifyBuildStatus('Success', buildFlavor)
+                    } catch (exc) {
+                        ghsb.postBuildFinished('FAILURE')
+                        notifyBuildStatus('Failure', buildFlavor)
+                        throw exc
                     }
-                    if (env.CHANGE_ID) {
-                        buildPRStepsMacOS type: 'Debug'
-                    } else {
-                        stage("Build MacOS ${CONFIGURATION}") {
-                            sh "./project/victor/scripts/victor_build_${CONFIGURATION}.sh -p ${PLATFORM}"
-                        }
-                    }
-                }
-                stage('Webots') {
-                    sh './project/build-scripts/webots/webotsTest.py'
-                }
-                stage('Unit Tests') {
-                    withEnv(['TESTCONFIG=Debug']){
-                        sh "./project/buildServer/steps/unittestsUtil.sh -c ${TESTCONFIG}"
-                        sh "./project/buildServer/steps/unittestsCoretech.sh -c ${TESTCONFIG}"
-                        sh "./project/buildServer/steps/unittestsEngine.sh -c ${TESTCONFIG}"
-                    }
-                }
-                stage('Pushing MacOS artifacts to Artifactory') {
-                    def macosFileSpec = """{
-                    "files": [
-                        {
-                        "pattern": "_build/mac/Debug/webots_out*.tar.gz",
-                        "target": "victor-engine/${env.BRANCH_NAME}/"
-                        }
-                    ]
-                    }"""
-                    server.upload(macosFileSpec)
-                }
-                stage('Cleaning MacOS workspace...') {
-                    cleanWs()
                 }
             }
         }
-    }*/
-    def staticAgentsBusy = checkIfAgentsAreBusy()
-    if (!staticAgentsBusy) {
-        node('victor-static') {
-            try {
-                withEnv(['PLATFORM=mac', 'CONFIGURATION=release', 'PATH+HOMEBREW=/usr/local/sbin:/usr/local/bin:/usr/local/share/dotnet']) {
-                    stage('Git Checkout') {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: scm.branches,
-                        gitTool: '/usr/local/bin/git',
-                        doGenerateSubmoduleConfigurations: scm.doGenerateSubmoduleConfigurations,
-                        extensions: scm.extensions,
-                        userRemoteConfigs: scm.userRemoteConfigs
-                    ])
-                        sh 'git submodule update --init --recursive'
-                        sh 'git submodule update --recursive'
-                    }
-                    if (env.CHANGE_ID) {
-                        buildPRStepsMacOS type: 'Debug'
-                    } else {
-                        stage("Build MacOS ${CONFIGURATION}") {
-                            sh "./project/victor/scripts/victor_build_${CONFIGURATION}.sh -p ${PLATFORM}"
-                        }
-                    }
-                }
-                stage('Webots') {
-                    timeout(time: 60, unit: 'MINUTES') {
-                        sh './project/build-scripts/webots/webotsTest.py'
-                    }
-                }
-                stage('Unit Tests') {
-                    withEnv(['TESTCONFIG=Debug']){
-                        sh "./project/buildServer/steps/unittestsUtil.sh -c ${TESTCONFIG}"
-                        sh "./project/buildServer/steps/unittestsCoretech.sh -c ${TESTCONFIG}"
-                        sh "./project/buildServer/steps/unittestsEngine.sh -c ${TESTCONFIG}"
-                    }
-                }
-                stage('DAS Unit Tests') {
-                    withEnv(["CXX=clang++", "LDFLAGS=-lpthread -luuid -lcurl -stdlib=libc++ -v"]) {
-                        sh "make -C ./lib/das-client/unix run-unit-tests"
-                        sh "make -f Makefile_sqs -C ./lib/das-client/unix run-unit-tests"
-                    }
-                }
-                notifyBuildStatus('Success')
-            } catch (Exception exc) {
-                def reason = exc.getMessage()
-                notifyBuildStatus("Failure: ${reason}")
-                throw exc
-            } finally {
-                stage('Cleaning slave workspace') {
-                    cleanWs()
-                }
-                node('master') {
-                    stage('Cleaning master workspace') {
-                        def workspace = pwd()
-                        dir("${workspace}@script") {
-                            deleteDir()
-                        }
-                    }
-                }
-            } 
-        }
-    } else {
-        agent = new EphemeralAgent()
+        parallel buildConfigMap
+    } catch (exc) {
+        throw exc
+    } finally {
         node('master') {
-            stage('Spin up ephemeral VM') {
-                try {
-                    uuid = agent.getMachineName()
-                    vSphere buildStep: [$class: 'Clone', clone: uuid, cluster: 'sjc-vm-cluster',
-                        customizationSpec: '', datastore: 'sjc-vm-04-localssd', folder: 'sjc/build',
-                        linkedClone: true, powerOn: false, resourcePool: 'vic-os',
-                        sourceName: 'photonos-test', timeoutInSeconds: 60], serverName: vSphereServer
-
-                    vSphere buildStep: [$class: 'Reconfigure', reconfigureSteps: [[$class: 'ReconfigureCpu',
-                        coresPerSocket: '1', cpuCores: '2']], vm: uuid], serverName: vSphereServer // Max overcommit is 4:1 vCPU to pCPU
-
-                    vSphere buildStep: [$class: 'PowerOn', timeoutInSeconds: 60, vm: uuid], serverName: vSphereServer
-
-                    def buildAgentIP = vSphere buildStep: [$class: 'ExposeGuestInfo', envVariablePrefix: 'VSPHERE', vm: uuid, waitForIp4: true], serverName: vSphereServer
-                    agent.setIPAddress(buildAgentIP)
-                } catch (Exception exc) {
-                    def jobName = "${env.JOB_NAME}"
-                    jobName = jobName.getAt(0..(jobName.indexOf('/') - 1))
-                    def reason = exc.getMessage()
-                    notifySlack("", slackNotificationChannel,
-                        [
-                            title: "${jobName} ${primaryStageName} ${env.CHANGE_ID}, build #${env.BUILD_NUMBER}",
-                            title_link: "${env.BUILD_URL}",
-                            color: "warning",
-                            text: "${reason}",
-                        ]
-                    )
-                    node('master') {
-                        stage('Cleaning master workspace') {
-                            def workspace = pwd()
-                            dir("${workspace}@script") {
-                                deleteDir()
-                            }
-                        }
-                        stage('Destroy ephemeral VM') {
-                            vSphere buildStep: [$class: 'Delete', failOnNoExist: true, vm: uuid], serverName: vSphereServer
-                        }
-                    }
-                    currentBuild.rawBuild.result = Result.ABORTED
-                    throw new hudson.AbortException('vSphere Exception!')
-                }
-            }
-            stage('Attach ephemeral build agent VM to Jenkins') {
-                agent.Attach()
-            }
-        }
-        node(uuid) {
-            try {
-                withDockerEnv {
-                    buildPRStepsVicOS type: buildConfig.SHIPPING.getBuildType()
-                    stage('DAS Unit Tests') {
-                        withEnv(["CXX=clang++", "LDFLAGS=-lpthread -luuid -lcurl -stdlib=libc++ -v"]) {
-                            sh "make -C ./lib/das-client/unix run-unit-tests"
-                            sh "make -f Makefile_sqs -C ./lib/das-client/unix run-unit-tests"
-                        }
-                    }
-                    //deployArtifacts type: buildConfig.SHIPPING.getArtifactType(), artifactoryServer: server
-                }
-                notifyBuildStatus('Success')
-            } catch (FlowInterruptedException ae) {
-                notifyBuildStatus('Aborted')
-                throw ae
-            } catch (exc) {
-                notifyBuildStatus('Failure')
-                throw exc
-            } finally {
-                stage('Cleaning slave workspace') {
-                    cleanWs()
-                }
-                node('master') {
-                    stage('Cleaning master workspace') {
-                        def workspace = pwd()
-                        dir("${workspace}@script") {
-                            deleteDir()
-                        }
-                    }
-                    stage('Destroy ephemeral VM') {
-                        vSphere buildStep: [$class: 'Delete', failOnNoExist: true, vm: uuid], serverName: vSphereServer
-                    }
-                    stage('Detach ephemeral build agent from Jenkins') {
-                        agent.Detach()
-                    }
+            stage('Cleaning master workspace') {
+                cleanWs()
+                def workspace = pwd()
+                dir("${workspace}@script") {
+                    deleteDir()
                 }
             }
         }
     }
 }
-
-/*
-node('victor-slaves') {
-    stage('Cleaning workspace') {
-        cleanWs()
-    }
-}
-*/

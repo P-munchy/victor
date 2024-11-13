@@ -61,10 +61,15 @@ private:
   void TransitionToCheckingForPerson();
   void TransitionToComatose();
   void TransitionToEmergencySleep();
+  void TransitionToHeldInPalmSleep();
   void TransitionToDeepSleep();
   void TransitionToLightSleep();
 
-  void SleepTransitionHelper(const SleepStateID& newState, const bool playSleepGetIn = true);
+  // Helper for transitioning to new sleep state.
+  // Delegates to preSleepDelegate, if defined, before transitioning to sleep.
+  void SleepTransitionHelper(const SleepStateID& newState, 
+                             const bool playSleepGetIn = true, 
+                             ICozmoBehaviorPtr preSleepDelegate = nullptr);
 
   void RespondToPersonCheck();
 
@@ -87,6 +92,7 @@ private:
   void SetReactionState(SleepReactionType reaction);
 
   static bool ShouldReactToSoundInState(const SleepStateID& state);
+  static bool IsPreSleepState(const SleepStateID& state);
 
   bool ShouldWiggleOntoChargerFromSleep();
 
@@ -112,12 +118,17 @@ private:
     ICozmoBehaviorPtr sleepingWakeWordBehavior;
     ICozmoBehaviorPtr wiggleBackOntoChargerBehavior;
     ICozmoBehaviorPtr emergencyModeAnimBehavior;
+    ICozmoBehaviorPtr joltInPalmBehavior;
+    ICozmoBehaviorPtr pickupFromPalmReaction;
 
     std::map< WakeReason, IBEIConditionPtr > wakeConditions;
 
     // high temp or low battery.
     // eventually we may want general "sleep conditions" similar to how "wake conditions" work
     IBEIConditionPtr emergencyCondition;
+    
+    // Robot wants to sleep on user's palm
+    IBEIConditionPtr heldInPalmCondition;
 
     std::vector< WakeReason > alwaysWakeReasons;
     std::map< SleepStateID, std::vector< WakeReason > > wakeReasonsPerState;

@@ -53,13 +53,13 @@ class DataAccessorComponent;
 class DelegationComponent;
 class FaceWorld;
 class HabitatDetectorComponent;
+class HeldInPalmTracker;
 class ICozmoBehavior;
 class IExternalInterface;
 class MapComponent;
 class MicComponent;
 class MoodManager;
 class MovementComponent;
-class ObjectPoseConfirmer;
 class PetWorld;
 class PhotographyManager;
 class PowerStateManager;
@@ -124,6 +124,7 @@ public:
     components.insert(BCComponentID::BehaviorTimerManager);
     components.insert(BCComponentID::BlockWorld);
     components.insert(BCComponentID::FaceWorld);
+    components.insert(BCComponentID::HeldInPalmTracker);
     components.insert(BCComponentID::RobotInfo);
     components.insert(BCComponentID::SleepTracker);
   }
@@ -148,11 +149,11 @@ public:
             DelegationComponent*           delegationComponent,
             FaceWorld*                     faceWorld,
             HabitatDetectorComponent*      habitatDetectorComponent,
+            HeldInPalmTracker*             heldInPalmTracker,
             MapComponent*                  mapComponent,
             MicComponent*                  micComponent,
             MoodManager*                   moodManager,
             MovementComponent*             movementComponent,
-            ObjectPoseConfirmer*           objectPoseConfirmer,
             PetWorld*                      petWorld,
             PhotographyManager*            photographyManager,
             PowerStateManager*             powerStateManager,
@@ -234,9 +235,6 @@ public:
 
   inline bool HasCubeInteractionTracker() const { return GetComponentWrapper(BEIComponentID::CubeInteractionTracker).IsComponentValid();}
   CubeInteractionTracker& GetCubeInteractionTracker() const { return GetComponentWrapper(BEIComponentID::CubeInteractionTracker).GetComponent<CubeInteractionTracker>();}
-  
-  inline bool HasObjectPoseConfirmer() const { return GetComponentWrapper(BEIComponentID::ObjectPoseConfirmer).IsComponentValid();}
-  ObjectPoseConfirmer& GetObjectPoseConfirmer() const { return GetComponentWrapper(BEIComponentID::ObjectPoseConfirmer).GetComponent<ObjectPoseConfirmer>();}
 
   inline bool HasCliffSensorComponent() const { return GetComponentWrapper(BEIComponentID::CliffSensor).IsComponentValid();}
   CliffSensorComponent& GetCliffSensorComponent() const { return GetComponentWrapper(BEIComponentID::CliffSensor).GetComponent<CliffSensorComponent>();}
@@ -279,6 +277,9 @@ public:
 
   inline bool HasSleepTracker() const { return GetComponentWrapper(BEIComponentID::SleepTracker).IsComponentValid();}
   SleepTracker& GetSleepTracker() const {return GetComponentWrapper(BEIComponentID::SleepTracker).GetComponent<SleepTracker>();}
+  
+  inline bool HasHeldInPalmTracker() const { return GetComponentWrapper(BEIComponentID::HeldInPalmTracker).IsComponentValid();}
+  HeldInPalmTracker& GetHeldInPalmTracker() const {return GetComponentWrapper(BEIComponentID::HeldInPalmTracker).GetComponent<HeldInPalmTracker>();}
 
   inline bool HasVariableSnapshotComponent() const { return GetComponentWrapper(BEIComponentID::VariableSnapshotComponent).IsComponentValid();}
   VariableSnapshotComponent& GetVariableSnapshotComponent() const {return GetComponentWrapper(BEIComponentID::VariableSnapshotComponent).GetComponent<VariableSnapshotComponent>();}
@@ -307,11 +308,11 @@ private:
                        DelegationComponent*           delegationComponent,
                        FaceWorld*                     faceWorld,
                        HabitatDetectorComponent*      habitatDetectorComponent,
+                       HeldInPalmTracker*             heldInPalmTracker,
                        MapComponent*                  mapComponent,
                        MicComponent*                  micComponent,
                        MoodManager*                   moodManager,
                        MovementComponent*             movementComponent,
-                       ObjectPoseConfirmer*           objectPoseConfirmer,
                        PetWorld*                      petWorld,
                        PhotographyManager*            photographyManager,
                        PowerStateManager*             powerStateManager,

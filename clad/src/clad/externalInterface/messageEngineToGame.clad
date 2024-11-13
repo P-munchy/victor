@@ -25,7 +25,6 @@
 #include "clad/types/loadedKnownFace.clad"
 #include "clad/types/logLevels.clad"
 #include "clad/types/motorTypes.clad"
-#include "clad/types/objectFamilies.clad"
 #include "clad/types/objectTypes.clad"
 #include "clad/types/onboardingStages.clad"
 #include "clad/types/offTreadsStates.clad"
@@ -179,15 +178,15 @@ message RobotFallingEvent {
 message RobotProcessedImage {
    uint_32 timestamp,
    VisionMode visionModes[uint_8],
-   uint_8 mean // Valid iff ComputingStatistics mode enabled
+   uint_8 mean // Valid iff Stats mode enabled
 }
 
 // RobotObservedObject for signaling that an object
-//  with specified ID/Type/Family was seen at a particular location in the image
+//  with specified ID/Type was seen at a particular location in the image
 //  and the world
 message RobotObservedObject {
     uint_32       timestamp,
-    ObjectFamily  objectFamily,
+    ObjectFamily  objectFamily,  // Note: This field is deprecated and is only here for SDK v0.5.1 compatibility
     ObjectType    objectType,
     int_32        objectID,      // signed to match U2G::PickAndPlaceObject which has the option to have objectID<0
     CladRect      img_rect,      // position in image coords
@@ -200,14 +199,6 @@ message RobotObservedObject {
 message RobotObservedPossibleObject {
     // objectID will always be -1
     RobotObservedObject possibleObject
-}
-
-// RobotObservedGenericObject - for detecting general objects (not Cozmo accessories with markers on them)
-message RobotObservedGenericObject {
-    CladRect      img_rect,       // Position in the image, if available
-    string        name,
-    uint_32       timestamp,
-    float_32      score
 }
 
 // RobotObservedFace
@@ -355,15 +346,9 @@ message DefinedCustomObject {
     bool success     // false if the last custom object definition failed (e.g. due to duplicate marker already in use)
 }
 
-// RobotMarkedObjectPoseUnknown
-message RobotMarkedObjectPoseUnknown {
-    uint_32 objectID
-}
-
 structure LocatedObjectState {
     uint_32      objectID,
     uint_32      lastObservedTimestamp,
-    ObjectFamily objectFamily,
     ObjectType   objectType,
     PoseStruct3d pose,
     PoseState    poseState,
@@ -376,20 +361,11 @@ message LocatedObjectStates {
 
 structure ConnectedObjectState {
     uint_32      objectID,
-    ObjectFamily objectFamily,
     ObjectType   objectType
 }
 
 message ConnectedObjectStates {
     ConnectedObjectState objects[uint_8]
-}
-
-// RobotEnrolledFace - Broadcast by BehaviorEnrollFace when it completes
-message FaceEnrollmentCompleted
-{
-  FaceEnrollmentResult result,
-  int_32               faceID,
-  string               name
 }
 
 // Status messages that will be superceded by some sort of generic status message (VIC-1423)

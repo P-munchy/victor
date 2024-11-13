@@ -63,7 +63,6 @@
 #include <Settings/SQLiteSettingStorage.h>
 #include <System/EndpointHandler.h>
 #include <System/SystemCapabilityProvider.h>
-#include <DefaultClient/DefaultClient.h>
 #include <SpeechSynthesizer/SpeechSynthesizer.h>
 #include <ACL/Transport/PostConnectSynchronizer.h>
 #include <AVSCommon/Utils/LibcurlUtils/LibcurlHTTP2ConnectionFactory.h>
@@ -88,6 +87,7 @@ namespace {
   
 #if ANKI_DEV_CHEATS
   DevShutdownChecker AlexaClient::_shutdownChecker;
+  std::list<Anki::Util::IConsoleFunction> sConsoleFuncs;
 #endif
   
   
@@ -100,6 +100,7 @@ std::unique_ptr<AlexaClient>
                       std::shared_ptr<capabilityAgents::alerts::storage::AlertStorageInterface> alertStorage,
                       std::shared_ptr<capabilityAgents::notifications::NotificationsStorageInterface> notificationsStorage,
                       std::shared_ptr<capabilityAgents::settings::SettingsStorageInterface> settingsStorage,
+                      std::shared_ptr<settings::storage::DeviceSettingStorageInterface> deviceSettingStorage,
                       std::shared_ptr<avsCommon::sdkInterfaces::audio::AudioFactoryInterface> audioFactory,
                       std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::DialogUXStateObserverInterface>> alexaDialogStateObservers,
                       std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::ConnectionStatusObserverInterface>> connectionObservers,
@@ -124,6 +125,7 @@ std::unique_ptr<AlexaClient>
                      alertStorage,
                      notificationsStorage,
                      settingsStorage,
+                     deviceSettingStorage,
                      audioFactory,
                      alexaDialogStateObservers,
                      connectionObservers,
@@ -193,8 +195,15 @@ AlexaClient::~AlexaClient()
   if( _userInactivityMonitor ) {
     _userInactivityMonitor->shutdown();
   }
+  if( _dndCapabilityAgent ) {
+    RemoveConnectionObserver( _dndCapabilityAgent );
+    _dndCapabilityAgent->shutdown();
+  }
   if( _softwareInfoSender ) {
     _softwareInfoSender->shutdown();
+  }
+  if( _deviceSettingStorage ) {
+    _deviceSettingStorage->close();
   }
 }
   
@@ -206,6 +215,7 @@ bool AlexaClient::Init( std::shared_ptr<avsCommon::utils::DeviceInfo> deviceInfo
                         std::shared_ptr<capabilityAgents::alerts::storage::AlertStorageInterface> alertStorage,
                         std::shared_ptr<capabilityAgents::notifications::NotificationsStorageInterface> notificationsStorage,
                         std::shared_ptr<capabilityAgents::settings::SettingsStorageInterface> settingsStorage,
+                        std::shared_ptr<settings::storage::DeviceSettingStorageInterface> deviceSettingStorage,
                         std::shared_ptr<avsCommon::sdkInterfaces::audio::AudioFactoryInterface> audioFactory,
                         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::DialogUXStateObserverInterface>> alexaDialogStateObservers,
                         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::ConnectionStatusObserverInterface>> connectionObservers,
@@ -229,6 +239,18 @@ bool AlexaClient::Init( std::shared_ptr<avsCommon::utils::DeviceInfo> deviceInfo
   
   for( auto observer : alexaDialogStateObservers ) {
     _dialogUXStateAggregator->addObserver( observer );
+  }
+  
+  _deviceSettingStorage = deviceSettingStorage;
+  if( !_deviceSettingStorage->open() ) {
+    ACSDK_ERROR(LX("initializeFailed").d("reason", "deviceSettingStorageOpenFailed"));
+    return false;
+  }
+  
+  _deviceSettingsManager = std::make_shared<settings::DeviceSettingsManager>();
+  if( !_deviceSettingsManager ) {
+    ACSDK_ERROR(LX("initializeFailed").d("reason", "createDeviceSettingsManagerFailed"));
+    return false;
   }
   
   // Creating the Attachment Manager - This component deals with managing attachments and allows for readers and
@@ -505,6 +527,20 @@ bool AlexaClient::Init( std::shared_ptr<avsCommon::utils::DeviceInfo> deviceInfo
   }
 #endif
   
+  // Creating the DoNotDisturb Capability Agent
+  //_dndCapabilityAgent
+  //  = capabilityAgents::doNotDisturb::DoNotDisturbCapabilityAgent::create( customerDataManager,
+  //                                                                         _exceptionSender,
+  //                                                                         _connectionManager,
+  //                                                                         _deviceSettingsManager,
+  //                                                                         _deviceSettingStorage );
+  //if( !_dndCapabilityAgent ) {
+  //  ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToCreateDNDCapabilityAgent"));
+  //  return false;
+  //}
+  //AddConnectionObserver( _dndCapabilityAgent );
+  
+  
   // Register directives
   
   // This creates a directive wrapper that lets us snoop on directives json sent to capabilities
@@ -594,6 +630,13 @@ bool AlexaClient::Init( std::shared_ptr<avsCommon::utils::DeviceInfo> deviceInfo
   }
 #endif
   
+  //if( !_directiveSequencer->addDirectiveHandler( MAKE_WRAPPER("Alexa.DoNotDisturb", _dndCapabilityAgent) ) ) {
+  //  ACSDK_ERROR(LX("initializeFailed")
+  //              .d("reason", "unableToRegisterDirectiveHandler")
+  //              .d("directiveHandler", "DND"));
+  //  return false;
+  //}
+  
   // Register capabilities
   
   if( !capabilitiesDelegate->registerCapability(_alertsCapabilityAgent) ) {
@@ -680,6 +723,28 @@ bool AlexaClient::Init( std::shared_ptr<avsCommon::utils::DeviceInfo> deviceInfo
       return false;
     }
   }
+  
+  //if( !capabilitiesDelegate->registerCapability(_dndCapabilityAgent) ) {
+  //  ACSDK_ERROR(LX("initializeFailed")
+  //              .d("reason", "unableToRegisterCapability")
+  //              .d("capabilitiesDelegate", "DoNotDisturb"));
+  //  return false;
+  //}
+  
+  // create console func(s)
+  auto sendDirective = [&](ConsoleFunctionContextRef context ) {
+    const char* unparsedDirective = ConsoleArg_Get_String( context, "directive" );
+    if( _directiveSequencer ) {
+      // if whatever responds to the directive needs to parse an attachment, that will be undefined behavior.
+      // for other things like alerts, this should work. Set LogAlexaDirectives to true, note the
+      // full directive printed to logs, and then modify it as needed and re-send it here
+      const std::string attachmentContextId;
+      auto directive = avsCommon::avs::AVSDirective::create( unparsedDirective, attachmentManager, attachmentContextId );
+      _directiveSequencer->onDirective( std::move(directive.first) );
+    }
+  };
+  sConsoleFuncs.emplace_front( "SendAlexaDirective", std::move(sendDirective), "Alexa", "const char* directive" );
+  
 #endif
   
 #if ANKI_DEV_CHEATS
@@ -806,6 +871,14 @@ void AlexaClient::AddConnectionObserver( std::shared_ptr<avsCommon::sdkInterface
 }
   
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+void AlexaClient::RemoveConnectionObserver( std::shared_ptr<avsCommon::sdkInterfaces::ConnectionStatusObserverInterface> observer )
+{
+  if( ANKI_VERIFY(_connectionManager != nullptr, "AlexaClient.RemoveConnectionObserver.Null", "Connection manager is null") ) {
+    _connectionManager->removeConnectionStatusObserver( observer );
+  }
+}
+  
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void AlexaClient::onCapabilitiesStateChange( CapabilitiesObserverInterface::State newState,
                                              CapabilitiesObserverInterface::Error newError )
 {
@@ -921,6 +994,12 @@ void AlexaClient::AddAudioPlayerObserver( std::shared_ptr<alexaClientSDK::avsCom
 std::shared_ptr<registrationManager::RegistrationManager> AlexaClient::GetRegistrationManager()
 {
   return _registrationManager;
+}
+ 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+std::shared_ptr<settings::DeviceSettingsManager> AlexaClient::GetSettingsManager()
+{
+  return _deviceSettingsManager;
 }
   
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

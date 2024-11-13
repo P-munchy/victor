@@ -44,7 +44,7 @@ namespace TextToSpeech {
 class TextToSpeechProviderImpl
 {
 public:
-  TextToSpeechProviderImpl(const AnimContext* context, const Json::Value& tts_platform_config);
+  TextToSpeechProviderImpl(const Anim::AnimContext* context, const Json::Value& tts_platform_config);
   ~TextToSpeechProviderImpl();
 
   Result SetLocale(const std::string & locale);
@@ -52,7 +52,11 @@ public:
   // Initialize TTS utterance and get first chunk of TTS audio.
   // Returns RESULT_OK on success, else error code.
   // Sets done to true when audio generation is complete.
-  Result GetFirstAudioData(const std::string & text, float durationScalar, TextToSpeechProviderData & data, bool & done);
+  Result GetFirstAudioData(const std::string & text,
+                           float durationScalar,
+                           float pitchScalar,
+                           TextToSpeechProviderData & data,
+                           bool & done);
 
   // Get next chunk of TTS audio.
   // Returns RESULT_OK on success, else error code.

@@ -66,6 +66,35 @@ rsync error: error in socket IO (code 10) at /BuildRoot/Library/Caches/com.apple
 ### How do I run unit tests?
   - https://ankiinc.atlassian.net/wiki/spaces/VD/pages/149363555/Victor+Unit+Tests
 
+### Unit tests are failing locally
+
+For example failing with these error messages:
+
+```
+2: (t:01) [Error] TFLiteLogReporter.Report Model provided has model identifier 'ion ', should be 'TFL3'
+2:  
+2: (t:01) [Error] TFLiteModel.LoadModelInternal.FailedToBuildFromFile /Users/arjun/Code/victor/_build/mac/Debug/test/engine/resources/config/engine/vision/dnn_models/dfp_victor_6x6_tiny_128x128_36b906234ae4405dbf479d42d87787da.tflite 
+2: (t:01) [Error] NeuralNetRunner.Init.LoadModelFailed  
+2: (t:01) [Error] VisionSystem.Init.NeuralNetInitFailed Name: person_detector 
+```
+
+*Resolution*
+
+This can be caused by a bad checkout by git lfs, so the fix is to either:
+
+- delete the offending folder but from the *resources* directory (NOT build)
+- check that folder out again
+- double check the file sizes match what is on github to be certain
+
+Importantly, no need to clean and build again. Tests should run fine after this.
+
+Alternatively these steps should work with getting a good checkout.
+
+- git lfs uninstall
+- rm  *that file*
+- git reset --hard
+- git lfs install && git lfs pull
+
 ### I get permission denied during build `error: can't exec 'victor/_build/mac/Debug-Xcode/launch-c' (Permission denied)`
   - `chmod u=rwx victor/_build/mac/Debug-Xcode/launch-c`
   - `chmod u=rwx victor/_build/mac/Debug-Xcode/launch-cxx`
@@ -184,9 +213,6 @@ to get:
   
 ### I want to use Linux, instead of macOS.  Which version should I use?
   - Use Ubuntu 16.04
-
-### I see warnings in the log about sprite sequences
-  - Errors like `SpriteSequenceLoader.LoadSpriteSequences.NoSpritenameForPath` can be fixed by running `./tools/sprites/createSpriteMap.py` from the root directory. This will create CLAD types and a mapping for them. This is mostly required for referencing the sprite sequences in code, to ensure that the build will break if these assets are missing. If only used within other animations, though, this step is technically not required as strings can be used instead (to speed up iteration time)
 
 ### Why did I get a 915 error?
 

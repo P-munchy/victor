@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     chrpath \
     curl \
+    ccache \
     dos2unix \
     flex \
     gawk \
@@ -45,8 +46,8 @@ RUN apt-get update && apt-get install -y clang-7 \
     libc++-7-dev 
 RUN ln -sf /usr/bin/clang++-7 /usr/bin/clang++
 
-RUN curl -sL https://deb.nodesource.com/setup_8.x | bash -
-RUN apt-get update && apt-get install -y nodejs
+# RUN curl -sL https://deb.nodesource.com/setup_8.x | bash -
+# RUN apt-get update && apt-get install -y nodejs
 
 RUN curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
 RUN apt-get install git-lfs

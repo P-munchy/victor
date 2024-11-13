@@ -18,10 +18,15 @@
 
 namespace Anki {
 namespace Vector {
+namespace Anim {
 
 namespace
 {
   const auto kProceduralGameObject = AudioMetaData::GameObjectType::Procedural;
+  #define CONSOLE_PATH "Audio.KeepAlive"
+  CONSOLE_VAR(bool, kEnableKeepAliveEyeBlinkAudioEvents, CONSOLE_PATH, true);
+  CONSOLE_VAR(bool, kEnableKeepAliveEyeDartAudioEvents, CONSOLE_PATH, true);
+  CONSOLE_VAR(bool, kEnableKeepAliveEyeSquintAudioEvents, CONSOLE_PATH, true);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -35,6 +40,10 @@ AudioLayerManager::AudioLayerManager(const Util::RandomGenerator& rng)
                                                     const BlinkEventList& eventList,
                                                     const TimeStamp_t timeSinceAnimStart_ms)
 {
+  if (!_enabled || !kEnableKeepAliveEyeBlinkAudioEvents) {
+    return RESULT_OK;
+  }
+  
   using namespace AudioKeyFrameType;
   using namespace AudioMetaData;
   Animations::Track<RobotAudioKeyFrame> audioTrack;
@@ -64,6 +73,10 @@ Result AudioLayerManager::AddEyeDartToAudioTrack(const std::string& layerName,
                                                  const TimeStamp_t interpolationTime_ms,
                                                  const TimeStamp_t timeSinceAnimStart_ms)
 {
+  if (!_enabled || !kEnableKeepAliveEyeDartAudioEvents) {
+    return RESULT_OK;
+  }
+  
   using namespace AudioKeyFrameType;
   using namespace AudioMetaData;
   RobotAudioKeyFrame frame;
@@ -89,6 +102,10 @@ Result AudioLayerManager::AddEyeDartToAudioTrack(const std::string& layerName,
 Result AudioLayerManager::AddEyeSquintToAudioTrack(const std::string& layerName,
                                                    const TimeStamp_t timeSinceAnimStart_ms)
 {
+  if (!_enabled || !kEnableKeepAliveEyeSquintAudioEvents) {
+    return RESULT_OK;
+  }
+  
   using namespace AudioKeyFrameType;
   using namespace AudioMetaData;
   Animations::Track<RobotAudioKeyFrame> audioTrack;
@@ -107,6 +124,10 @@ Result AudioLayerManager::AddEyeSquintToAudioTrack(const std::string& layerName,
 void AudioLayerManager::GenerateGlitchAudio(u32 numFramesToGen,
                                             Animations::Track<RobotAudioKeyFrame>& outTrack) const
 {
+  if (!_enabled) {
+    return;
+  }
+  
   // TODO: VIC-447: Restore glitching
   /*
   float prevGlitchAudioSampleVal = 0.f;
@@ -128,5 +149,6 @@ void AudioLayerManager::GenerateGlitchAudio(u32 numFramesToGen,
    */
 }
 
+}
 }
 }

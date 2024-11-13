@@ -20,20 +20,13 @@ const Anki::Pose3d origin(0, Anki::Z_AXIS_3D(), {0,0,0}, "Origin");
 
 const Anki::Vector::ProxSensorData proxSensorValid = { .distance_mm = 100,
                                                       .signalQuality = 10,
-                                                      .isInValidRange = true,
-                                                      .isValidSignalQuality = true,
-                                                      .isLiftInFOV = false,
-                                                      .isTooPitched = false };
+                                                      .isLiftInFOV = false };
 
 const Anki::Vector::ProxSensorData proxSensorNotValid = { .distance_mm = 100,
                                                         .signalQuality = 10,
-                                                        .isInValidRange = true,
-                                                        .isValidSignalQuality = true,
-                                                        .isLiftInFOV = true,
-                                                        .isTooPitched = false };
+                                                        .isLiftInFOV = true };
 
 
-const uint8_t noCliffDetectedFlags = 0;
 const uint8_t frontCliffDetectedFlags = (1<<Anki::Util::EnumToUnderlying(Anki::Vector::CliffSensor::CLIFF_FL)) | 
                                         (1<<Anki::Util::EnumToUnderlying(Anki::Vector::CliffSensor::CLIFF_FR));
 
@@ -67,6 +60,8 @@ TEST(RobotStateHistory, AddGetPose)
   state1.cliffDataRaw.fill(800);
   state2.cliffDataRaw.fill(800);
   state3.cliffDataRaw.fill(800);
+
+  state2.cliffDetectedFlags = frontCliffDetectedFlags;
   
   const RobotTimeStamp_t t1 = 0;
   const RobotTimeStamp_t t2 = 10;
@@ -88,7 +83,7 @@ TEST(RobotStateHistory, AddGetPose)
   
   
   // Add and get one pose
-  hist.AddRawOdomState(t1, HistRobotState(p1, state1, proxSensorNotValid, noCliffDetectedFlags));
+  hist.AddRawOdomState(t1, HistRobotState(p1, state1, proxSensorNotValid));
   
   ASSERT_TRUE(hist.GetNumRawStates() == 1);
   ASSERT_TRUE(hist.ComputeStateAt(t1, t, histState) == RESULT_OK);
@@ -100,7 +95,7 @@ TEST(RobotStateHistory, AddGetPose)
   
   
   // Add another pose
-  HistRobotState histState2(p2, state2, proxSensorValid, frontCliffDetectedFlags);
+  HistRobotState histState2(p2, state2, proxSensorValid);
   hist.AddRawOdomState(t2, histState2);
   
   // Request out of range pose
@@ -122,14 +117,14 @@ TEST(RobotStateHistory, AddGetPose)
   
   // since interpolation is in the middle it should be the newest
   ASSERT_TRUE(histState.WasCarryingObject() == WasStateCarrying(state2));
-  ASSERT_TRUE(histState.WasProxSensorValid() == histState2.WasProxSensorValid());
+  ASSERT_TRUE(histState.GetProxSensorData().foundObject == histState2.GetProxSensorData().foundObject);
   for (int i=0; i<Util::EnumToUnderlying(CliffSensor::CLIFF_COUNT); ++i) {
     CliffSensor sensor = static_cast<CliffSensor>(i);
     ASSERT_TRUE(histState.WasCliffDetected(sensor) == histState2.WasCliffDetected(sensor));
   }
 
   // Add new pose that should bump off oldest pose
-  hist.AddRawOdomState(t3, HistRobotState(p3, state3, proxSensorValid, noCliffDetectedFlags));
+  hist.AddRawOdomState(t3, HistRobotState(p3, state3, proxSensorValid));
   
   ASSERT_TRUE(hist.GetNumRawStates() == 2);
   
@@ -142,7 +137,7 @@ TEST(RobotStateHistory, AddGetPose)
   ASSERT_TRUE(p2.IsSameAs(histState.GetPose(), 1e-5f, DEG_TO_RAD(0.1f)));  
   
   // Add old pose that is out of time window
-  hist.AddRawOdomState(t1, HistRobotState(p1, state1, proxSensorValid, noCliffDetectedFlags));
+  hist.AddRawOdomState(t1, HistRobotState(p1, state1, proxSensorValid));
   
   ASSERT_TRUE(hist.GetNumRawStates() == 2);
   ASSERT_TRUE(hist.GetOldestTimeStamp() == t2);
@@ -270,7 +265,7 @@ TEST(RobotStateHistory, CullToWindowSizeTest)
   
   const Pose3d p(0, Z_AXIS_3D(), Vec3f(0,0,0), origin );
   RobotState state(Robot::GetDefaultRobotState());
-  HistRobotState histState(p, state, proxSensorValid, noCliffDetectedFlags);
+  HistRobotState histState(p, state, proxSensorValid);
 
   // Verify that culling on empty history doesn't cause a crash
   hist.CullToWindowSize();  // Keeps the latest 300ms and removes the rest

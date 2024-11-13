@@ -29,7 +29,7 @@ const int32_t kUseDefaultStreamingDuration = -1;
 namespace Anki {
 namespace Vector {
 
-ShowAudioStreamStateManager::ShowAudioStreamStateManager(const AnimContext* context)
+ShowAudioStreamStateManager::ShowAudioStreamStateManager(const Anim::AnimContext* context)
 : _context(context)
 , _minStreamingDuration_ms(kUseDefaultStreamingDuration)
 {
@@ -134,27 +134,35 @@ void ShowAudioStreamStateManager::StartTriggerResponseWithoutGetIn(OnTriggerAudi
   }
 
   Audio::CozmoAudioController* controller = _context->GetAudioController();
-  if(nullptr != controller){
+  if (nullptr != controller) {
     AudioCallbackContext* audioCallbackContext = nullptr;
-    if(callback){
+    if (callback) {
       audioCallbackContext = new AudioCallbackContext();
       audioCallbackContext->SetCallbackFlags( AudioCallbackFlag::Complete );
       audioCallbackContext->SetExecuteAsync( false ); // Execute callbacks synchronously (on main thread)
-      audioCallbackContext->SetEventCallbackFunc([callbackFunc = std::move(callback)]
+      audioCallbackContext->SetEventCallbackFunc([callbackFunc = callback]
                                                  (const AudioCallbackContext* thisContext, const AudioCallbackInfo& callbackInfo)
       {
         callbackFunc(true);
       });
     }
 
-    controller->PostAudioEvent(ToAudioEventId(_postAudioEvent.audioEvent),
-                               ToAudioGameObject(_postAudioEvent.gameObject),
-                               audioCallbackContext);
+    AudioPlayingId result = controller->PostAudioEvent(ToAudioEventId(_postAudioEvent.audioEvent),
+                                                       ToAudioGameObject(_postAudioEvent.gameObject),
+                                                       audioCallbackContext);
+
+    // if we failed to post the earcon, we still want the callback to be called successfully since we've still
+    // completed the get-in process.  the unsuccessful callback is for when no valid response exists ... in this
+    // case, it DOES exists, the audio engine is just being an ass right now
+    if ( AudioEngine::kInvalidAudioPlayingId == result )
+    {
+      callback(true);
+    }
   }
   else
   {
     // even though we don't have a valid audio controller, we still had a valid trigger response so return true
-    if(callback){
+    if (callback) {
       callback(true);
     }
   }
@@ -183,7 +191,7 @@ bool ShowAudioStreamStateManager::ShouldSimulateStreamAfterTriggerWord()
 void ShowAudioStreamStateManager::SetAlexaUXResponses(const RobotInterface::SetAlexaUXResponses& msg)
 {
   std::lock_guard<std::recursive_mutex> lock(_triggerResponseMutex); // HasAnyAlexaResponse may be called off thread
-  
+
   _alexaResponses.clear();
   const std::string csvResponses{msg.csvGetInAnimNames, msg.csvGetInAnimNames_length};
   const std::vector<std::string> animNames = Util::StringSplit(csvResponses, ',');
@@ -223,11 +231,11 @@ uint32_t ShowAudioStreamStateManager::GetMinStreamingDuration()
     return MicData::kStreamingDefaultMinDuration_ms;
   }
 }
-  
+
 bool ShowAudioStreamStateManager::HasAnyAlexaResponse() const
 {
   std::lock_guard<std::recursive_mutex> lock(_triggerResponseMutex);
-  
+
   for( const auto& info : _alexaResponses ) {
     if( info.getInAnimTag != 0 ) {
       return true;
@@ -235,7 +243,7 @@ bool ShowAudioStreamStateManager::HasAnyAlexaResponse() const
   }
   return false;
 }
-  
+
 bool ShowAudioStreamStateManager::HasValidAlexaUXResponse(AlexaUXState state) const
 {
   for( const auto& info : _alexaResponses ) {
@@ -247,7 +255,7 @@ bool ShowAudioStreamStateManager::HasValidAlexaUXResponse(AlexaUXState state) co
   }
   return false;
 }
-  
+
 bool ShowAudioStreamStateManager::StartAlexaResponse(AlexaUXState state, bool ignoreGetIn)
 {
   const AlexaInfo* response = nullptr;
@@ -258,39 +266,42 @@ bool ShowAudioStreamStateManager::StartAlexaResponse(AlexaUXState state, bool ig
       response = &info;
     }
   }
-  
+
   if( response == nullptr ) {
     return false;
   }
-  
+
   if( !response->getInAnimName.empty() && !ignoreGetIn ) {
     // TODO: (VIC-11516) it's possible that the UX state went back to idle for just a short while, in
     // which case the engine could be playing the get-out from the previous UX state, or worse, is
     // still in the looping animation for that ux state. it would be nice if the get-in below only
     // plays if the eyes are showing.
-    
+
     auto* anim = _context->GetDataLoader()->GetCannedAnimation( response->getInAnimName );
     if( ANKI_VERIFY( (_streamer != nullptr) && (anim != nullptr),
                      "ShowAudioStreamStateManager.StartAlexaResponse.NoValidGetInAnim",
                      "Animation not found for get in %s", response->getInAnimName.c_str() ) )
     {
-      // start animation, but don't render in eye hue
-      _streamer->SetStreamingAnimation( response->getInAnimName, response->getInAnimTag, 1, 0, true, true, false );
+      const bool interruptRunning = true;
+      _streamer->SetStreamingAnimation( response->getInAnimName, response->getInAnimTag, 1, 0, interruptRunning);
     }
   }
-  
-  Audio::CozmoAudioController* controller = _context->GetAudioController();
-  if( ANKI_VERIFY(nullptr != controller, "ShowAudioStreamStateManager.StartAlexaResponse.NullAudioController",
-                  "The CozmoAudioController is null so the audio event cannot be played" ) )
-  {
-    using namespace AudioEngine;
-    const auto audioEvent = response->audioEvent.audioEvent;
-    if ( audioEvent != AudioMetaData::GameEvent::GenericEvent::Invalid ) {
-      controller->PostAudioEvent( ToAudioEventId( audioEvent ),
-                                  ToAudioGameObject( response->audioEvent.gameObject ) );
+
+  // Only play earcons when not frozen on charger (alexa acoustic test mode)
+  if( !(_onCharger && _frozenOnCharger) ) {
+    Audio::CozmoAudioController* controller = _context->GetAudioController();
+    if( ANKI_VERIFY(nullptr != controller, "ShowAudioStreamStateManager.StartAlexaResponse.NullAudioController",
+                    "The CozmoAudioController is null so the audio event cannot be played" ) )
+    {
+      using namespace AudioEngine;
+      const auto audioEvent = response->audioEvent.audioEvent;
+      if ( audioEvent != AudioMetaData::GameEvent::GenericEvent::Invalid ) {
+        controller->PostAudioEvent( ToAudioEventId( audioEvent ),
+                                    ToAudioGameObject( response->audioEvent.gameObject ) );
+      }
     }
   }
-  
+
   return true;
 }
 

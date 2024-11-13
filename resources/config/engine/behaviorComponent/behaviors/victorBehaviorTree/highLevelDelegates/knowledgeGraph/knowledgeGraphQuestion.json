@@ -1,15 +1,16 @@
 {
   "behaviorClass" : "KnowledgeGraphQuestion",
   "behaviorID"    : "KnowledgeGraphQuestion",
-  
+
   "associatedActiveFeature": "KnowledgeGraph",
-  
+
   "respondToUserIntents" :
   [
-    { "type": "knowledge_question" }
+    { "type": "knowledge_question" },
+    { "type": "knowledge_response_bypass" }
   ],
 
-  "readyPromptText"         : "ready",
+  "readyStringID"           : "BehaviorKnowledgeGraphQuestion.Ready",
   "streamingTimeout"        : 10.0,
   "earConAudioEventEnd"     : "Play__Robot_Vic_Sfx__Wake_Word_Success",
 

@@ -1,4 +1,24 @@
 {
+  "simple_voice_responses": [
+    {
+      "cloud_intent": "intent_greeting_hello",
+      "response": {
+        "anim_group": "ag_greeting_hello",
+        "emotion_event": "RespondToShortVoiceCommand",
+        "active_feature": "ReactToHello"
+      }
+    },
+    {
+      "cloud_intent": "intent_imperative_forward",
+      "response": {
+        "anim_group": "ag_movement_forward_01",
+        "emotion_event": "RespondToShortVoiceCommand",
+        "active_feature": "MovementForward",
+        "disable_wakeword_turn": true
+      }
+    }
+  ],
+
   "user_intent_map": [
     {
       "cloud_intent": "intent_amazon_signin",
@@ -15,6 +35,26 @@
     {
       "cloud_intent": "intent_play_anygame",
       "user_intent": "play_anygame"
+    },
+    {
+      "cloud_intent": "intent_play_blackjack",
+      "user_intent": "play_blackjack"
+    },
+    {
+      "cloud_intent": "intent_play_fistbump",
+      "user_intent": "play_fistbump"
+    },
+    {
+      "cloud_intent": "intent_play_pickupcube",
+      "user_intent": "play_pickupcube"
+    },
+    {
+      "cloud_intent": "intent_play_popawheelie",
+      "user_intent": "play_popawheelie"
+    },
+    {
+      "cloud_intent": "intent_play_rollcube",
+      "user_intent": "play_rollcube"
     },
     {
       "cloud_intent": "intent_imperative_quiet",
@@ -91,12 +131,9 @@
       "user_intent": "greeting_goodnight"
     },
     {
-      "cloud_intent": "intent_greeting_hello",
-      "user_intent": "greeting_hello"
-    },
-    {
       "cloud_intent": "intent_status_feeling",
-      "user_intent": "status_feeling"
+      "user_intent": "status_feeling",
+      "test_parsing": false
     },
     {
       "cloud_intent": "intent_clock_checktimer",
@@ -122,7 +159,8 @@
         "speakable_location_string": "speakableLocationString",
         "is_forecast": "isForecast",
         "temperature_unit": "temperatureUnit",
-        "local_datetime": "localDateTime"
+        "local_datetime": "localDateTime",
+        "day_or_night": "dayOrNight"
       }
     },
     {
@@ -141,11 +179,6 @@
       "cloud_intent": "intent_system_sleep",
       "app_intent": "intent_system_sleep",
       "user_intent": "system_sleep"
-    },
-    {
-      "cloud_intent": "intent_play_specific_extend",
-      "app_intent": "intent_play_specific",
-      "user_intent": "play_specific"
     },
     {
       "user_intent": "meet_victor",
@@ -183,12 +216,21 @@
       "user_intent": "knowledge_response",
       "cloud_intent": "intent_knowledge_response_extend",
       "app_intent": "knowledge_response",
+      "test_parsing": false,
       "feature_gate": "KnowledgeGraph"
     },
+    {
+      "user_intent": "knowledge_response_bypass",
+      "cloud_intent": "intent_knowledge_response_extend_bypass",
+      "app_intent": "knowledge_response_bypass",
+      "test_parsing": false,
+      "feature_gate": "KnowledgeGraph"
+    },    
     {
       "user_intent": "knowledge_unknown",
       "cloud_intent": "intent_knowledge_no_response",
       "app_intent": "knowledge_unknown",
+      "test_parsing": false,
       "feature_gate": "KnowledgeGraph"
     },
     {
@@ -233,7 +275,8 @@
     },
     {
       "user_intent": "silence",
-      "cloud_intent": "intent_system_noaudio"
+      "cloud_intent": "intent_system_noaudio",
+      "test_parsing": false
     },
     {
       "user_intent": "imperative_volumelevel",
@@ -249,10 +292,6 @@
       "user_intent": "imperative_volumedown",
       "cloud_intent": "intent_imperative_volumedown",
       "feature_gate": "Volume"
-    },
-    {
-      "user_intent": "movement_forward",
-      "cloud_intent": "intent_imperative_forward"
     },
     {
       "user_intent": "movement_backward",
@@ -282,6 +321,16 @@
       "user_intent": "character_age",
       "cloud_intent": "intent_character_age",
       "feature_gate": "HowOldAreYou"
+    },
+    {
+      "user_intent": "imperative_eyecolor_specific",
+      "cloud_intent": "intent_imperative_eyecolor_specific_extend",
+      "feature_gate": "EyeColorVC"
+    },
+    {
+      "user_intent": "imperative_eyecolor",
+      "cloud_intent": "intent_imperative_eyecolor",
+      "feature_gate": "EyeColorVC"
     }
   ],
 

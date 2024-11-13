@@ -30,7 +30,7 @@ namespace Anki {
 namespace Vector {
 namespace TextToSpeech {
 
-TextToSpeechProvider::TextToSpeechProvider(const AnimContext * ctx, const Json::Value& tts_config)
+TextToSpeechProvider::TextToSpeechProvider(const Anim::AnimContext * ctx, const Json::Value& tts_config)
 {
   // Get configuration struct for this platform
 #if defined(ANKI_PLATFORM_OSX)
@@ -59,12 +59,13 @@ Result TextToSpeechProvider::SetLocale(const std::string & locale)
 
 Result TextToSpeechProvider::GetFirstAudioData(const std::string & text,
                                                float durationScalar,
+                                               float pitchScalar,
                                                TextToSpeechProviderData & data,
                                                bool & done)
 {
   // Forward to implementation
   DEV_ASSERT(_impl != nullptr, "TextToSpeechProvider.GetFirstAudioData.InvalidImplementation");
-  return _impl->GetFirstAudioData(text, durationScalar, data, done);
+  return _impl->GetFirstAudioData(text, durationScalar, pitchScalar, data, done);
 }
 
 Result TextToSpeechProvider::GetNextAudioData(TextToSpeechProviderData & data, bool & done)

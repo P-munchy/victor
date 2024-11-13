@@ -11,7 +11,6 @@
  **/
 #include "engine/robotEventHandler.h"
 
-#include "engine/activeObject.h"
 #include "engine/aiComponent/aiComponent.h"
 #include "engine/aiComponent/behaviorComponent/behaviorComponent.h"
 #include "engine/aiComponent/behaviorComponent/behaviorContainer.h"
@@ -100,11 +99,21 @@ template<class MessageType>
 static IActionRunner* GetActionHelper(Robot& robot, const MessageType& msg);
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: PlaceObjectOnGroundHereRequest
+//  if any changes are made here, they should be reflected in the associated function.
 //IActionRunner* GetPlaceObjectOnGroundHereAction(Robot& robot, const ExternalInterface::PlaceObjectOnGroundHere& msg)
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PlaceObjectOnGroundHere& msg)
 {
   return new PlaceObjectOnGroundAction();
+}
+
+// Proto equivalent of the preceding PlaceObjectOnGroundHere clad message handler.
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::PlaceObjectOnGroundHereRequest& msg)
+{
+  PlaceObjectOnGroundAction *action = new PlaceObjectOnGroundAction();
+  return action;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -182,7 +191,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::GotoPose& 
   return action;
 }
 
-// Proto equivalent of the preceeding GotoPose clad message handler.
+// Proto equivalent of the preceding GotoPose clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::GoToPoseRequest& msg)
 {
@@ -231,6 +240,8 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PanAndTilt
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: PickupObject
+//  if any changes are made here, they should be reflected in the associated function.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PickupObject& msg)
 {
@@ -250,7 +261,6 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PickupObje
     {
       robot.GetPathComponent().SetCustomMotionProfileForAction(msg.motionProf, action);
     }
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
 
     return action;
   }
@@ -264,7 +274,45 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PickupObje
     action->SetDoNearPredockPoseCheck(false);
     // We don't care about a specific marker just that we are docking with the correct object
     action->SetShouldVisuallyVerifyObjectOnly(true);
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
+    return action;
+  }
+}
+
+// Proto equivalent of the preceding PickupObject clad message handler.
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::PickupObjectRequest& msg)
+{
+  ObjectID selectedObjectID;
+  if(msg.object_id() < 0) {
+    selectedObjectID = robot.GetBlockWorld().GetSelectedObject();
+  } else {
+    selectedObjectID = msg.object_id();
+  }
+
+  PathMotionProfile pathMotionProfile = ConvertProtoPathMotionProfile(msg.motion_prof());
+  if(static_cast<bool>(msg.use_pre_dock_pose()))
+  {
+    DriveToPickupObjectAction* action = new DriveToPickupObjectAction(selectedObjectID,
+                                                                      msg.use_approach_angle(),
+                                                                      msg.approach_angle_rad());
+
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
+    }
+
+    return action;
+  }
+  else
+  {
+    PickupObjectAction* action = new PickupObjectAction(selectedObjectID);
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
+    }
+    action->SetDoNearPredockPoseCheck(false);
+    // We don't care about a specific marker just that we are docking with the correct object
+    action->SetShouldVisuallyVerifyObjectOnly(true);
     return action;
   }
 }
@@ -324,7 +372,6 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PlaceOnObj
     {
       robot.GetPathComponent().SetCustomMotionProfileForAction(msg.motionProf, action);
     }
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
     return action;
   } else {
     PlaceRelObjectAction* action = new PlaceRelObjectAction(selectedObjectID,
@@ -334,12 +381,13 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PlaceOnObj
     action->SetDoNearPredockPoseCheck(false);
     // We don't care about a specific marker just that we are docking with the correct object
     action->SetShouldVisuallyVerifyObjectOnly(true);
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
     return action;
   }
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: GotoObjectRequest
+//  if any changes are made here, they should be reflected in the associated function.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::GotoObject& msg)
 {
@@ -363,6 +411,36 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::GotoObject
   if(msg.motionProf.isCustom)
   {
     robot.GetPathComponent().SetCustomMotionProfileForAction(msg.motionProf, action);
+  }
+
+  return action;
+}
+
+// Proto equivalent of the preceding GotoObject clad message handler.
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::GoToObjectRequest& msg)
+{
+  ObjectID selectedObjectID;
+  if(msg.object_id() < 0) {
+    selectedObjectID = robot.GetBlockWorld().GetSelectedObject();
+  } else {
+    selectedObjectID = msg.object_id();
+  }
+
+  DriveToObjectAction* action;
+  if(msg.use_pre_dock_pose())
+  {
+    action = new DriveToObjectAction(selectedObjectID,
+                                     PreActionPose::ActionType::DOCKING);
+  } else {
+    action = new DriveToObjectAction(selectedObjectID,
+                                     msg.distance_from_object_origin_mm());
+  }
+
+  PathMotionProfile pathMotionProfile = ConvertProtoPathMotionProfile(msg.motion_prof());
+  if(pathMotionProfile.isCustom)
+  {
+    robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
   }
 
   return action;
@@ -408,7 +486,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::AlignWithO
   }
 }
 
-// Proto equivalent of the preceeding AlignWithObject clad message handler.
+// Proto equivalent of the preceding AlignWithObject clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::DockWithCubeRequest& msg)
 {
@@ -479,7 +557,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::DriveStrai
   return new DriveStraightAction(msg.dist_mm, msg.speed_mmps, msg.shouldPlayAnimation);
 }
 
-// Proto equivalent of the preceeding DriveStraight clad message handler.
+// Proto equivalent of the preceding DriveStraight clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::DriveStraightRequest& msg)
 {
@@ -492,6 +570,8 @@ IActionRunner* GetActionHelper(Robot& robot, const external_interface::DriveStra
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: RollObjectRequest
+//  if any changes are made here, they should be reflected in the associated function.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::RollObject& msg)
 {
@@ -511,7 +591,6 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::RollObject
     {
       robot.GetPathComponent().SetCustomMotionProfileForAction(msg.motionProf, action);
     }
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
     return action;
   } else {
     RollObjectAction* action = new RollObjectAction(selectedObjectID);
@@ -523,13 +602,50 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::RollObject
     action->SetDoNearPredockPoseCheck(false);
     // We don't care about a specific marker just that we are docking with the correct object
     action->SetShouldVisuallyVerifyObjectOnly(true);
-    action->SetShouldCheckForObjectOnTopOf(msg.checkForObjectOnTop);
     action->EnableRollWithoutDock(msg.rollWithoutDocking);
     return action;
   }
 }
 
+// Proto equivalent of the preceding RollObject clad message handler with a couple settings removed (doDeepRoll and rollWithoutDocking).
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::RollObjectRequest& msg)
+{
+  ObjectID selectedObjectID;
+  if(msg.object_id() < 0) {
+    selectedObjectID = robot.GetBlockWorld().GetSelectedObject();
+  } else {
+    selectedObjectID = msg.object_id();
+  }
+
+  PathMotionProfile pathMotionProfile = ConvertProtoPathMotionProfile(msg.motion_prof());
+  if(static_cast<bool>(msg.use_pre_dock_pose())) {
+    DriveToRollObjectAction* action = new DriveToRollObjectAction(selectedObjectID,
+                                                                  msg.use_approach_angle(),
+                                                                  msg.approach_angle_rad());
+    
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
+    }
+    return action;
+  } else {
+    RollObjectAction* action = new RollObjectAction(selectedObjectID);
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
+    }
+    
+    action->SetDoNearPredockPoseCheck(false);
+    // We don't care about a specific marker just that we are docking with the correct object
+    action->SetShouldVisuallyVerifyObjectOnly(true);
+    return action;
+  }
+}
+
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: PopAWheelieRequest
+//  if any changes are made here, they should be reflected in the associated function.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PopAWheelie& msg)
 {
@@ -555,6 +671,40 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::PopAWheeli
     if(msg.motionProf.isCustom)
     {
       robot.GetPathComponent().SetCustomMotionProfileForAction(msg.motionProf, action);
+    }
+    action->SetDoNearPredockPoseCheck(false);
+    // We don't care about a specific marker just that we are docking with the correct object
+    action->SetShouldVisuallyVerifyObjectOnly(true);
+    return action;
+  }
+}
+
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::PopAWheelieRequest& msg)
+{
+  ObjectID selectedObjectID;
+  if(msg.object_id() < 0) {
+    selectedObjectID = robot.GetBlockWorld().GetSelectedObject();
+  } else {
+    selectedObjectID = msg.object_id();
+  }
+
+  PathMotionProfile pathMotionProfile = ConvertProtoPathMotionProfile(msg.motion_prof());
+  if(static_cast<bool>(msg.use_pre_dock_pose())) {
+    DriveToPopAWheelieAction* action = new DriveToPopAWheelieAction(selectedObjectID,
+                                                                    msg.use_approach_angle(),
+                                                                    msg.approach_angle_rad());
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
+    }
+
+    return action;
+  } else {
+    PopAWheelieAction* action = new PopAWheelieAction(selectedObjectID);
+    if(pathMotionProfile.isCustom)
+    {
+      robot.GetPathComponent().SetCustomMotionProfileForAction(pathMotionProfile, action);
     }
     action->SetDoNearPredockPoseCheck(false);
     // We don't care about a specific marker just that we are docking with the correct object
@@ -646,7 +796,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::TurnInPlac
   return action;
 }
 
-// Proto equivalent of the preceeding TurnInPlace clad message handler.
+// Proto equivalent of the preceding TurnInPlace clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::TurnInPlaceRequest& msg)
 {
@@ -710,6 +860,8 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::TurnToward
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// THIS FUNCTION IS A CLAD EQUIVALENT FOR THE FOLLOWING: TurnTowardsFaceRequest
+//  if any changes are made here, they should be reflected in the associated function.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::TurnTowardsFace& msg)
 {
@@ -728,6 +880,16 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::TurnToward
   action->SetMaxTiltSpeed(msg.maxTiltSpeed_radPerSec);
   action->SetTiltAccel(msg.tiltAccel_radPerSec2);
   action->SetTiltTolerance(msg.tiltTolerance_rad);
+
+  return action;
+}
+
+// Proto equivalent of the preceeding TurnTowardsFace clad message handler, with the exception that this method allows fewer settings.
+template<>
+IActionRunner* GetActionHelper(Robot& robot, const external_interface::TurnTowardsFaceRequest& msg)
+{
+  SmartFaceID smartID = robot.GetFaceWorld().GetSmartFaceID(msg.face_id());
+  TurnTowardsFaceAction* action = new TurnTowardsFaceAction(smartID, Radians(msg.max_turn_angle_rad()));
 
   return action;
 }
@@ -842,7 +1004,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::SetHeadAng
   return action;
 }
 
-// Proto equivalent of the preceeding SetHeadAngle clad message handler.
+// Proto equivalent of the preceding SetHeadAngle clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::SetHeadAngleRequest& msg)
 {
@@ -914,7 +1076,7 @@ IActionRunner* GetActionHelper(Robot& robot, const ExternalInterface::SetLiftHei
   }
 }
 
-// Proto equivalent of the preceeding SetLiftHeight clad message handler.
+// Proto equivalent of the preceding SetLiftHeight clad message handler.
 template<>
 IActionRunner* GetActionHelper(Robot& robot, const external_interface::SetLiftHeightRequest& msg)
 {
@@ -1647,12 +1809,12 @@ void RobotEventHandler::HandleMessage(const ExternalInterface::DrawPoseMarker& m
   {
     if(robot->GetCarryingComponent().IsCarryingObject()) {
       Pose3d targetPose(msg.rad, Z_AXIS_3D(), Vec3f(msg.x_mm, msg.y_mm, 0));
-      const ObservableObject* carryObject = robot->GetBlockWorld().GetLocatedObjectByID(robot->GetCarryingComponent().GetCarryingObject());
+      const ObservableObject* carryObject = robot->GetBlockWorld().GetLocatedObjectByID(robot->GetCarryingComponent().GetCarryingObjectID());
       if(nullptr == carryObject)
       {
         PRINT_NAMED_WARNING("RobotEventHandler.HandleDrawPoseMarker.NullCarryObject",
                             "Carry object set to ID=%d, but BlockWorld returned NULL",
-                            robot->GetCarryingComponent().GetCarryingObject().GetValue());
+                            robot->GetCarryingComponent().GetCarryingObjectID().GetValue());
         return;
       }
       Quad2f objectFootprint = carryObject->GetBoundingQuadXY(targetPose);
@@ -1910,7 +2072,7 @@ public:
     // Put the action in the given position of the specified queue.
     // The Queue will take responsibility for the memory management of this raw pointer - unless it fails
     //  in which case we clean up the memory ourselves.
-    if( robot.GetActionList().QueueAction(QueueActionPosition::NOW, dispatchAction, 0) != RESULT_OK )
+    if( robot.GetActionList().QueueAction(QueueActionPosition::IN_PARALLEL, dispatchAction, 0) != RESULT_OK )
     {
       PRINT_NAMED_WARNING("RobotEventHandler.GatewayActionRunner.Invoke.ActionCouldNotQueue", "%s", internalAction->GetName().c_str());
     }
@@ -1928,12 +2090,18 @@ static const std::map< external_interface::GatewayWrapperTag, std::unique_ptr<IG
           []( const AnkiEvent<external_interface::GatewayWrapper>& event ) { return event.GetData().__extractionFunction__(); } \
         )
 
-    ADD_GATEWAY_HANDLER( kGoToPoseRequest,      GoToPoseRequest,      go_to_pose_request );
-    ADD_GATEWAY_HANDLER( kDockWithCubeRequest,  DockWithCubeRequest,  dock_with_cube_request );
-    ADD_GATEWAY_HANDLER( kDriveStraightRequest, DriveStraightRequest, drive_straight_request );
-    ADD_GATEWAY_HANDLER( kTurnInPlaceRequest,   TurnInPlaceRequest,   turn_in_place_request );
-    ADD_GATEWAY_HANDLER( kSetLiftHeightRequest, SetLiftHeightRequest, set_lift_height_request );
-    ADD_GATEWAY_HANDLER( kSetHeadAngleRequest,  SetHeadAngleRequest,  set_head_angle_request );
+    ADD_GATEWAY_HANDLER( kGoToPoseRequest,                 GoToPoseRequest,                 go_to_pose_request );
+    ADD_GATEWAY_HANDLER( kDockWithCubeRequest,             DockWithCubeRequest,             dock_with_cube_request );
+    ADD_GATEWAY_HANDLER( kDriveStraightRequest,            DriveStraightRequest,            drive_straight_request );
+    ADD_GATEWAY_HANDLER( kTurnInPlaceRequest,              TurnInPlaceRequest,              turn_in_place_request );
+    ADD_GATEWAY_HANDLER( kSetLiftHeightRequest,            SetLiftHeightRequest,            set_lift_height_request );
+    ADD_GATEWAY_HANDLER( kSetHeadAngleRequest,             SetHeadAngleRequest,             set_head_angle_request );
+    ADD_GATEWAY_HANDLER( kTurnTowardsFaceRequest,          TurnTowardsFaceRequest,          turn_towards_face_request );
+    ADD_GATEWAY_HANDLER( kGoToObjectRequest,               GoToObjectRequest,               go_to_object_request );
+    ADD_GATEWAY_HANDLER( kRollObjectRequest,               RollObjectRequest,               roll_object_request );
+    ADD_GATEWAY_HANDLER( kPopAWheelieRequest,              PopAWheelieRequest,              pop_a_wheelie_request );
+    ADD_GATEWAY_HANDLER( kPickupObjectRequest,             PickupObjectRequest,             pickup_object_request );
+    ADD_GATEWAY_HANDLER( kPlaceObjectOnGroundHereRequest,  PlaceObjectOnGroundHereRequest,  place_object_on_ground_here_request );
   }
   return result;
 }
@@ -1954,7 +2122,7 @@ void RobotEventHandler::HandleMessage(const AnkiEvent<external_interface::Gatewa
   if( handlerMap.count(tag) == 0 )
   {
     PRINT_NAMED_WARNING("RobotEventHandler.HandleMessage.NoGatewayHandler",
-                        "Gateway message recieved with no handler for tag %i", (int)tag);
+                        "Gateway message received with no handler for tag %i", (int)tag);
     return;
   }
 

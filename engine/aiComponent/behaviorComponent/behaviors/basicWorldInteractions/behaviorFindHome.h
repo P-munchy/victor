@@ -15,7 +15,7 @@
 
 #include "engine/aiComponent/behaviorComponent/behaviors/iCozmoBehavior.h"
 
-#include "coretech/common/engine/math/polygon.h"
+#include "coretech/common/engine/math/polygon_fwd.h"
 #include "coretech/common/engine/math/pose.h"
 
 #include "util/random/rejectionSamplerHelper_fwd.h"
@@ -28,6 +28,7 @@ namespace RobotPointSamplerHelper {
   class RejectIfWouldCrossCliff;
   class RejectIfCollidesWithMemoryMap;
 }
+struct VisionProcessingResult;
   
 enum class AnimationTrigger : int32_t;
 class BlockWorldFilter;
@@ -50,6 +51,8 @@ protected:
   virtual void InitBehavior() override;
   virtual void AlwaysHandleInScope(const EngineToGameEvent& event) override;
   virtual void OnBehaviorActivated() override;
+  virtual void OnBehaviorDeactivated() override;
+  virtual void GetAllDelegates(std::set<IBehavior*>& delegates) const override;
 
 private:
   struct InstanceConfig {
@@ -62,18 +65,7 @@ private:
     float       minDrivingDist_mm = 0.f;
     float       maxDrivingDist_mm = 0.f;
     
-    // Enable to use exposure cycling while waiting for searching for charger to improve chances
-    // of seeing it in difficult illumination (backlight, harsh sunlight). NumImagesToWaitFor (below)
-    // also should be increased
-    bool        useExposureCycling = true;
-    
-    // If using cycling exposure to find charger (above), we need to wait at least cycle_length * auto_exp_period frames
-    // Default is auto exposure every 5 frames and cycle length 3, meaning 15 frames
-    int         numImagesToWaitFor = 15;
-    
     AnimationTrigger searchTurnAnimTrigger;
-    AnimationTrigger searchTurnEndAnimTrigger;
-    AnimationTrigger waitForImagesAnimTrigger;
     AnimationTrigger postSearchAnimTrigger;
     std::unique_ptr<BlockWorldFilter> homeFilter;
     
@@ -83,6 +75,8 @@ private:
     std::shared_ptr<RobotPointSamplerHelper::RejectIfInRange> condHandleNearPrevSearch;
     std::shared_ptr<RobotPointSamplerHelper::RejectIfWouldCrossCliff> condHandleCliffs;
     std::shared_ptr<RobotPointSamplerHelper::RejectIfCollidesWithMemoryMap> condHandleCollisions;
+
+    ICozmoBehaviorPtr observeChargerBehavior = nullptr;
   };
 
   struct DynamicVariables {
@@ -99,6 +93,14 @@ private:
     // Cumulative angle swept while searching in place for
     // the charger
     float angleSwept_deg = 0.f;
+
+    // Count of the frames of marker detection being run
+    //  while this behavior is activated.
+    u32 numFramesOfMarkers = 0;
+
+    // Count of the frames where the image quality was TooDark.
+    // NOTE: only counted while marker detection is being run.
+    u32 numFramesOfImageTooDark = 0; 
     
     struct Persistent {
       // Map of basestation time to locations at which we have executed
@@ -115,8 +117,8 @@ private:
   InstanceConfig   _iConfig;
   DynamicVariables _dVars;
   
-  void TransitionToHeadStraight();
   void TransitionToStartSearch();
+  void TransitionToLookInPlace();
   void TransitionToSearchTurn();
   void TransitionToRandomDrive();
   
@@ -130,7 +132,6 @@ private:
   // Cull the list of searched locations to the recent window and return
   // a vector of recently searched locations.
   std::vector<Point2f> GetRecentlySearchedLocations();
-  
 };
   
 

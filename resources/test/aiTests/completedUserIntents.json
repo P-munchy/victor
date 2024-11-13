@@ -32,13 +32,11 @@
     },
 
     "roll_cube": {
-      "type": "play_specific",
-      "entity_behavior": "roll_cube"
+      "type": "play_rollcube"
     },
 
     "fist_bump": {
-      "type": "play_specific",
-      "entity_behavior": "fist_bump"
+      "type": "play_fistbump"
     },
 
     // keep_away was removed from entity_behavior_entries_en.json in April
@@ -57,9 +55,10 @@
       "type": "imperative_lookatme"
     },
 
-    "imperative_lookoverthere": {
-      "type": "imperative_lookatme"
-    },
+    // commented out until the 'GazeDirection' feature is enabled in resources/config/features.json
+    //"imperative_lookoverthere": {
+    //  "type": "imperative_lookoverthere"
+    //},
 
     "names_ask": {
       "type": "names_ask"
@@ -77,7 +76,7 @@
       "type": "imperative_shutup"
     }
 
-    // commented out until featureGate gets set to true
+    // commented out until we enable the corresponding tests in test/engine/behaviorComponent/testUserIntentTransitions.cpp
   //   "imperative_volumelevel": {
   //     "type": "imperative_volumelevel"
   //     // how do I specify one of several values for a parameter?

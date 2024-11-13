@@ -20,11 +20,14 @@
 #include "util/entityComponent/iDependencyManagedComponent.h"
 #include "util/helpers/noncopyable.h"
 #include "util/signals/signalHolder.h"
+#include "util/signals/simpleSignal.hpp"
 
 #include "proto/external_interface/settings.pb.h"
 
 #include "json/json.h"
 #include <map>
+#include <thread>
+#include <atomic>
 
 namespace Anki {
 namespace Vector {
@@ -37,6 +40,10 @@ class SettingsManager : public IDependencyManagedComponent<RobotComponentID>,
 {
 public:
   SettingsManager();
+  ~SettingsManager(); // destruction
+  std::thread _rainbowEyeThread;
+  std::atomic<bool> _isRainbowEyesActive{false};
+  std::atomic<bool> _stopRainbowEyeThread{false};
 
   //////
   // IDependencyManagedComponent functions
@@ -59,6 +66,13 @@ public:
                        const Json::Value& valueJson,
                        const bool updateSettingsJdoc,
                        bool& ignoredDueToNoChange);
+
+  bool SetRobotEyeColorSetting(const Json::Value& valueJson,
+                              const bool updateSettingsJdoc,
+                              bool& ignoredDueToNoChange);
+                             
+  using SettingsCallbackOnSetFunc = void (void);
+  Signal::SmartHandle RegisterSettingsCallbackOnSet(const external_interface::RobotSetting key, const std::function<SettingsCallbackOnSetFunc>& cbFun);
 
   // Return the setting value (currently strings, bools, uints supported)
   std::string GetRobotSettingAsString(const external_interface::RobotSetting key) const;
@@ -116,11 +130,13 @@ private:
   bool                      _applySettingsNextTick = false;
 
   using SettingFunction = bool (SettingsManager::*)();
+  using SettingsSignal = Signal::Signal<SettingsCallbackOnSetFunc>;
   struct SettingSetter
   {
-    bool                    isLatentApplication; // if true, setting will be pending and must be claimed
-    SettingFunction         validationFunction;
-    SettingFunction         applicationFunction;
+    bool            isLatentApplication; // if true, setting will be pending and must be claimed
+    SettingFunction validationFunction;
+    SettingFunction applicationFunction;
+    std::unique_ptr<SettingsSignal> callbackSignal;
   };
   using SettingSetters = std::map<external_interface::RobotSetting, SettingSetter>;
   SettingSetters            _settingSetters;

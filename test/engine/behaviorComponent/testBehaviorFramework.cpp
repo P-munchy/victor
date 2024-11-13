@@ -38,8 +38,9 @@
 #include "engine/aiComponent/behaviorComponent/behaviors/iCozmoBehavior.h"
 #include "engine/aiComponent/behaviorComponent/behaviorStack.h"
 #include "engine/aiComponent/behaviorComponent/userIntentComponent.h"
-#include "engine/activeCube.h"
+#include "engine/block.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/charger.h"
 #include "engine/components/battery/batteryComponent.h"
 #include "engine/components/mics/micComponent.h"
@@ -101,11 +102,11 @@ void InitBEIPartial( const BEIComponentMap& map, BehaviorExternalInterface& bei 
            GetFromMap<DelegationComponent>(map, BEIComponentID::Delegation),
            GetFromMap<FaceWorld>(map, BEIComponentID::FaceWorld),
            GetFromMap<HabitatDetectorComponent>(map, BEIComponentID::HabitatDetector),
+           GetFromMap<HeldInPalmTracker>(map, BEIComponentID::HeldInPalmTracker),
            GetFromMap<MapComponent>(map, BEIComponentID::Map),
            GetFromMap<MicComponent>(map, BEIComponentID::MicComponent),
            GetFromMap<MoodManager>(map, BEIComponentID::MoodManager),
            GetFromMap<MovementComponent>(map, BEIComponentID::MovementComponent),
-           GetFromMap<ObjectPoseConfirmer>(map, BEIComponentID::ObjectPoseConfirmer),
            GetFromMap<PetWorld>(map, BEIComponentID::PetWorld),
            GetFromMap<PhotographyManager>(map, BEIComponentID::PhotographyManager),
            GetFromMap<PowerStateManager>(map, BEIComponentID::PowerStateManager),
@@ -857,7 +858,7 @@ void TestBehaviorFramework::AddFakeFirstFace()
   if( _robot->GetStateHistory()->GetNumRawStates() == 0 ) {
     // faceworld needs an update to robot state before adding a face (this should only happen in unit tests)
     RobotState robotState = Robot::GetDefaultRobotState();
-    _robot->GetStateHistory()->AddRawOdomState(faceWorld->_lastObservedFaceTimeStamp, HistRobotState(_robot->GetPose(), robotState, {}, {}));
+    _robot->GetStateHistory()->AddRawOdomState(faceWorld->_lastObservedFaceTimeStamp, HistRobotState(_robot->GetPose(), robotState, {}));
     
     // a face only gets added if the robot isn't moving much. to check this, there must be some IMU values
     TimeStamp_t ts = (TimeStamp_t)faceWorld->_lastObservedFaceTimeStamp;
@@ -890,18 +891,15 @@ void TestBehaviorFramework::AddFakeFirstObject( ObjectType objectType, Pose3d* p
     pose = &originPose;
   }
   
-  ObjectFamily objectFamily;
   ObservableObject* objectPtr;
   switch( objectType ) {
     case ObjectType::Charger_Basic:
-      objectFamily = ObjectFamily::Charger;
       objectPtr = new Charger();
       break;
     case ObjectType::Block_LIGHTCUBE1:
     case ObjectType::Block_LIGHTCUBE2:
     case ObjectType::Block_LIGHTCUBE3:
-      objectFamily = ObjectFamily::Block;
-      objectPtr = new ActiveCube( objectType );
+      objectPtr = new Block( objectType );
       break;
     default:
       // unsupported
@@ -917,6 +915,15 @@ void TestBehaviorFramework::AddFakeFirstObject( ObjectType objectType, Pose3d* p
   blockWorld->AddLocatedObject( std::shared_ptr<ObservableObject>(objectPtr) );
   
   ANKI_VERIFY( blockWorld->FindLocatedMatchingObject(filter) != nullptr, "TestBehaviorFramework.AddFakeFirstObject.Fail", "" );
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+void TestBehaviorFramework::IterateSimpleVoiceResponse(std::function< void( const MetaUserIntent_SimpleVoiceResponse& ) > lambda)
+{
+  if( ANKI_VERIFY(_aiComponent != nullptr, "TestBehaviorFramework.IterateSimpleVoiceResponse.NullAIComponent", "") ) {
+    auto& uic = _aiComponent->GetComponent<BehaviorComponent>().GetComponent<UserIntentComponent>();
+    uic.DEVONLY_IterateSimpleVoiceResponse({}, lambda);
+  }
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

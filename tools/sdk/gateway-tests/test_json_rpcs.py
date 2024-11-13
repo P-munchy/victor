@@ -14,13 +14,16 @@ try:
 except ImportError:
     sys.exit("Error: This script requires you to run setup.sh")
 
-from util import vector_connection
+from util import live_robot_only, vector_connection
 
 def test_protocol_version(vector_connection):
     vector_connection.send("v1/protocol_version", p.ProtocolVersionRequest(), p.ProtocolVersionResponse())
 
 def test_list_animations(vector_connection):
     vector_connection.send("v1/list_animations", p.ListAnimationsRequest(), p.ListAnimationsResponse())
+
+def test_list_animation_triggers(vector_connection):
+    vector_connection.send("v1/list_animation_triggers", p.ListAnimationTriggersRequest(), p.ListAnimationTriggersResponse())
 
 @pytest.mark.parametrize("data", [
     '{"intent":"intent_meet_victor","param":"Bobert"}'
@@ -71,6 +74,9 @@ def test_enable_mirror_mode(vector_connection):
     vector_connection.send("v1/enable_mirror_mode", p.EnableMirrorModeRequest(enable=True), p.EnableMirrorModeResponse())
     vector_connection.send("v1/enable_mirror_mode", p.EnableMirrorModeRequest(enable=False), p.EnableMirrorModeResponse())
 
+# This can only run locally because webots will always have image streaming turned on (meaning the second rpc call will not succeed).
+# Note: if there was a change made to have a webots world run without the keyboard controller enabled then this test could be re-enabled for local testing.
+@live_robot_only
 def test_enable_image_streaming(vector_connection):
     vector_connection.send("v1/enable_image_streaming", p.EnableImageStreamingRequest(enable=True), p.EnableImageStreamingResponse())
     vector_connection.send("v1/enable_image_streaming", p.EnableImageStreamingRequest(enable=False), p.EnableImageStreamingResponse())
@@ -169,6 +175,8 @@ def test_pull_jdocs(vector_connection, data):
     '{"settings": {"eye_color": -1}}',
     '{"settings":{"clock_24_hour":true,"eye_color":5}}',
     '{"settings":{"clock_24_hour":true}}',
+    '{"settings": {"custom_eye_color": { "enabled": true, "hue": 1, "saturation": 1.0 }}}',
+    '{"settings": { "eye_color": 6, "custom_eye_color": { "enabled": false, "hue": 1, "saturation": 1.0 }}}',
 ])
 def test_update_settings_raw(vector_connection, data):
     def callback(response, response_type):
@@ -195,6 +203,7 @@ def test_update_account_settings(vector_connection, data):
 def test_update_user_entitlements(vector_connection, data):
     vector_connection.send_raw("v1/update_user_entitlements", data, p.UpdateUserEntitlementsResponse())
 
+@live_robot_only
 def test_user_authentication(vector_connection):
     vector_connection.send("v1/user_authentication", p.UserAuthenticationRequest(), p.UserAuthenticationResponse())
 
@@ -204,20 +213,18 @@ def test_battery_state(vector_connection):
 def test_version_state(vector_connection):
     vector_connection.send("v1/version_state", p.VersionStateRequest(), p.VersionStateResponse())
 
-def test_say_text(vector_connection):
-    vector_connection.send("v1/say_text", p.SayTextRequest(), p.SayTextResponse())
+# TODO Turn back on
+# def test_connect_cube(vector_connection):
+#     vector_connection.send("v1/connect_cube", p.ConnectCubeRequest(), p.ConnectCubeResponse())
 
-def test_connect_cube(vector_connection):
-    vector_connection.send("v1/connect_cube", p.ConnectCubeRequest(), p.ConnectCubeResponse())
+# def test_disconnect_cube(vector_connection):
+#     vector_connection.send("v1/disconnect_cube", p.DisconnectCubeRequest(), p.DisconnectCubeResponse())
 
-def test_disconnect_cube(vector_connection):
-    vector_connection.send("v1/disconnect_cube", p.DisconnectCubeRequest(), p.DisconnectCubeResponse())
+# def test_cubes_available(vector_connection):
+#     vector_connection.send("v1/cubes_available", p.CubesAvailableRequest(), p.CubesAvailableResponse())
 
-def test_cubes_available(vector_connection):
-    vector_connection.send("v1/cubes_available", p.CubesAvailableRequest(), p.CubesAvailableResponse())
-
-def test_flash_cube_lights(vector_connection):
-    vector_connection.send("v1/flash_cube_lights", p.FlashCubeLightsRequest(), p.FlashCubeLightsResponse())
+# def test_flash_cube_lights(vector_connection):
+#     vector_connection.send("v1/flash_cube_lights", p.FlashCubeLightsRequest(), p.FlashCubeLightsResponse())
 
 def test_forget_preferred_cube(vector_connection):
     vector_connection.send("v1/forget_preferred_cube", p.ForgetPreferredCubeRequest(), p.ForgetPreferredCubeResponse())
@@ -234,6 +241,7 @@ def test_check_update_status(vector_connection):
 def test_update_and_restart(vector_connection):
     vector_connection.send("v1/update_and_restart", p.UpdateAndRestartRequest(), p.UpdateAndRestartResponse())
 
+@live_robot_only
 def test_upload_debug_logs(vector_connection):
     def callback(response, response_type):
         print("Default response: {}".format(response.content))
@@ -245,6 +253,7 @@ def test_upload_debug_logs(vector_connection):
         print("Converted Protobuf: {}".format(response_type))
     vector_connection.send("v1/upload_debug_logs", p.UploadDebugLogsRequest(), p.UploadDebugLogsResponse(), callback=callback)
 
+@live_robot_only
 def test_check_cloud_connection(vector_connection):
     vector_connection.send("v1/check_cloud_connection", p.CheckCloudRequest(), p.CheckCloudResponse())
 
@@ -261,6 +270,21 @@ def test_feature_flag(vector_connection, data, result):
         assert data["valid_feature"] == result
         assert data["feature_enabled"] == 0
     vector_connection.send_raw("v1/feature_flag", data, p.FeatureFlagResponse(), callback=callback)
+
+@pytest.mark.parametrize("data,result", [
+    ('{"request_list":[]}', 1),  # result is whether the result list is non-empty
+    ('{"request_list":["TestFeature"]}', 0),
+    ('{"request_list":["NotAFeature"]}', 0)
+])
+def test_feature_flag_list(vector_connection, data, result):
+    length = 0
+    def callback(response, response_type):
+        print("Default response: {}".format(response.content))
+        data = json.loads(response.content)
+        assert "list" in data
+        
+        assert ((len(data["list"]) > 0) == result)
+    vector_connection.send_raw("v1/feature_flag_list", data, p.FeatureFlagListResponse(), callback=callback)
 
 def test_alexa_auth_state(vector_connection):
     def callback(response, response_type):
@@ -281,3 +305,10 @@ def test_alexa_opt_out(vector_connection, data):
 
 def test_set_eye_color(vector_connection):
     vector_connection.send("v1/set_eye_color", p.SetEyeColorRequest(), p.SetEyeColorResponse())
+
+def test_cancel_behavior(vector_connection):
+    vector_connection.send("v1/cancel_behavior", p.CancelBehaviorRequest(), p.CancelBehaviorResponse())
+
+# TODO Turn back on
+#def test_capture_single_image(vector_connection):
+#    vector_connection.send("v1/capture_single_image", p.CaptureSingleImageRequest(), p.CaptureSingleImageResponse())

@@ -39,13 +39,13 @@ static f32  kDefaultTimeout_ms    = 20000;
 static f32  kTimeToDisplayResultOnFace_ms = 10000;
 
 // Whether or not to skip checking we have heard from an active object
-static bool kSkipActiveObjectCheck        = false;
- 
+static bool kSkipActiveObjectCheck        = true;
+
 // SSID we should try to scan and connect to for the radio check
-static std::string kWifiSSID = "AnkiSelfTest";
+static std::string kWifiSSID = "Bf#tm$5[hzs]QX0g";
 
 // Password for above SSID
-static std::string kWifiPwd = "";
+static std::string kWifiPwd = "srw1JWOnjq;$YlB,";
 
 // ---------PickupChecks--------
 // How long the robot needs to be held upside down
@@ -119,10 +119,10 @@ static f32 kVisualDistanceToDistanceSensorObjectThresh_mm = 30;
 
 // Threshold on the raw distance sensor reading from the expected distance defined in the
 // distance sensor behavior json file
-static f32 kDistanceSensorReadingThresh_mm = 20;
+static f32 kDistanceSensorReadingThresh_mm = 30;
 
 // Bias adjustment for raw distance sensor reading when comparing to visual distance
-static f32 kDistanceSensorBiasAdjustment_mm = 0;
+static f32 kDistanceSensorBiasAdjustment_mm = -12;
 
 // ----------Drive Forwards----------
 // Distance to drive forwards to trigger the front cliff sensors

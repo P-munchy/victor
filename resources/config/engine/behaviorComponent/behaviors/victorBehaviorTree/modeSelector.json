@@ -9,6 +9,7 @@
     "AlexaSignInOut",
     "Alexa",
     "EmergencyMode",
+    "SDKOverrideAll",
     "ShutUpMode",
     "QuietMode",
     "SleepCycle"

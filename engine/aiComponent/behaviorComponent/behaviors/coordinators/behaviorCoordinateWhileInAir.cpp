@@ -18,6 +18,7 @@
 #include "engine/aiComponent/behaviorComponent/behaviorContainer.h"
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.h"
 #include "engine/aiComponent/behaviorComponent/behaviorTypesWrapper.h"
+#include "engine/aiComponent/behaviorComponent/heldInPalmTracker.h"
 #include "engine/components/animationComponent.h"
 #include "engine/components/movementComponent.h"
 
@@ -28,6 +29,7 @@ namespace Vector {
 namespace{
 // The set of behaviors which maintain control of the robot, even when it's in the air
 static const std::set<BehaviorID> kBehaviorStatesToSuppressInAirReaction = {{ BEHAVIOR_ID(BlackJack),
+                                                                              BEHAVIOR_ID(HeldInPalmDispatcher),
                                                                               BEHAVIOR_ID(ReactToTouchPetting),
                                                                               BEHAVIOR_ID(TakeAPhotoCoordinator),
                                                                               BEHAVIOR_ID(WeatherResponses),
@@ -37,6 +39,12 @@ static const std::set<BehaviorID> kBehaviorStatesToSuppressInAirReaction = {{ BE
                                                                               BEHAVIOR_ID(SingletonAnticShowClock),
                                                                               BEHAVIOR_ID(SingletonTimerCheckTime),
                                                                               BEHAVIOR_ID(SingletonTimerSet)  }};
+  
+static const std::set<BehaviorID> kBehaviorStatesToNotLockTracks =
+  {{
+    BEHAVIOR_ID(WhatsMyNameVoiceCommand),
+    BEHAVIOR_ID(MeetVictor)
+  }};
 
 const BehaviorID kWhileInAirDispatcher = BEHAVIOR_ID(WhileInAirDispatcher);
 const TimeStamp_t kMaxTimeForInitialPickupReaction_ms = 1000;
@@ -63,29 +71,11 @@ void BehaviorCoordinateWhileInAir::InitPassThrough()
   _initialPickupReaction = BC.FindBehaviorByID(BEHAVIOR_ID(InitialPickupAnimation));
   _onBackReaction = BC.FindBehaviorByID(BEHAVIOR_ID(ReactToRobotOnBack));
   _onFaceReaction = BC.FindBehaviorByID(BEHAVIOR_ID(ReactToRobotOnFace));
+  _heldInPalmDispatcher = BC.FindBehaviorByID(BEHAVIOR_ID(HeldInPalmDispatcher));
   {
     _suppressInAirBehaviorSet = std::make_unique<AreBehaviorsActivatedHelper>(BC, kBehaviorStatesToSuppressInAirReaction);
+    _dontLockTracksBehaviorSet = std::make_unique<AreBehaviorsActivatedHelper>(BC, kBehaviorStatesToNotLockTracks);
   }
-
-  // Saftey check - behaviors that are  in the list need to internally list that they can be activated while in the air
-  // or response will not work as expected
-  if(ANKI_DEV_CHEATS){
-    for(const auto& id : kBehaviorStatesToSuppressInAirReaction){
-      // This one works, but due to init order dependencies the modifiers aren't set up properly
-      if(id == BEHAVIOR_ID(SingletonTimerAlreadySet)){
-        continue;
-      }
-      const auto behaviorPtr = BC.FindBehaviorByID(id);
-      BehaviorOperationModifiers modifiers;
-      behaviorPtr->GetBehaviorOperationModifiers(modifiers);
-      ANKI_VERIFY(modifiers.wantsToBeActivatedWhenOffTreads,
-                  "BehaviorCoordinateWhileInAir.InitPassThrough.BehaviorCantRunInAir",
-                  "Behavior %s is listed as a behavior that suppresses the in air reaction, \
-                  but modifier says it can't run while in the air", BehaviorTypesWrapper::BehaviorIDToString(id));
-      
-    }
-  }
-  
 }
 
 
@@ -119,14 +109,16 @@ void BehaviorCoordinateWhileInAir::PassThroughUpdate()
 
   const bool isInAirReactionPlaying = _whileInAirDispatcher->IsActivated() ||
                                       _onBackReaction->IsActivated() ||
-                                      _onFaceReaction->IsActivated();
+                                      _onFaceReaction->IsActivated() ||
+                                      _heldInPalmDispatcher->IsActivated();
   
   // Only lock tracks if the "picked up reaction" behavior is _not_ running (since the "react to picked up" animations
   // make use of the treads).
   //
-  // Same applies to onBack and onFace reactions as well. Since they can transition through the InAir state while 
-  // the reaction animation is playing we don't want to lock tracks in the middle since that can cause the wheels 
-  // to keep moving based on the last BodyMotionKeyFrame that went through before the lock.
+  // Same applies to onBack and onFace reactions, and the HeldInPalmDispatcher as well. Since they can transition through
+  // the InAir state while their reaction animations are playing or in between different behaviors of the held-in-palm
+  // dispatcher, we don't want to lock tracks in the middle since that can cause the wheels to keep moving based on the
+  // last BodyMotionKeyFrame that went through before the lock.
   if(((offTreadsState == OffTreadsState::InAir) ||
       (offTreadsState == OffTreadsState::Falling)) &&
      !isInAirReactionPlaying){
@@ -149,9 +141,14 @@ void BehaviorCoordinateWhileInAir::PassThroughUpdate()
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorCoordinateWhileInAir::LockTracksIfAppropriate()
 {
-  if(!_areTreadsLocked){
+  const bool shouldLockTracks = !_dontLockTracksBehaviorSet->AreBehaviorsActivated() &&
+    !GetBEI().GetHeldInPalmTracker().IsHeldInPalm();
+  if(!_areTreadsLocked && shouldLockTracks){
     SmartLockTracks(static_cast<u8>(AnimTrackFlag::BODY_TRACK), GetDebugLabel(), GetDebugLabel());
     _areTreadsLocked = true;
+  } else if (_areTreadsLocked && !shouldLockTracks) {
+    SmartUnLockTracks(GetDebugLabel());
+    _areTreadsLocked = false;
   }
 }
 
@@ -183,6 +180,32 @@ void BehaviorCoordinateWhileInAir::SuppressInitialPickupReactionIfAppropriate()
   }
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+void BehaviorCoordinateWhileInAir::OnFirstPassThroughUpdate()
+{
+  // Safety check - behaviors that are  in the list need to internally list that they can be activated while in the air
+  // or response will not work as expected.
+  const auto& BC = GetBEI().GetBehaviorContainer();
+  for(const auto& id : kBehaviorStatesToSuppressInAirReaction){
+    const auto behaviorPtr = BC.FindBehaviorByID(id);
+    const BehaviorOperationModifiers& modifiers = behaviorPtr->GetBehaviorOperationModifiersPostInit();
+    ANKI_VERIFY(modifiers.wantsToBeActivatedWhenOffTreads,
+                "BehaviorCoordinateWhileInAir.OnFirstUpdate.BehaviorCantRunInAir",
+                "Behavior %s is listed as a behavior that suppresses the in air reaction, \
+                but modifier says it can't run while in the air", BehaviorTypesWrapper::BehaviorIDToString(id));
+    
+  }
+  
+  for(const auto& id : kBehaviorStatesToNotLockTracks){
+    const auto behaviorPtr = BC.FindBehaviorByID(id);
+    const BehaviorOperationModifiers& modifiers = behaviorPtr->GetBehaviorOperationModifiersPostInit();
+    ANKI_VERIFY(modifiers.wantsToBeActivatedWhenOffTreads,
+                "BehaviorCoordinateWhileInAir.OnFirstUpdate.BehaviorCantRunInAir",
+                "Behavior %s is listed as a behavior that unlocks the tracks in the air, \
+                but modifier says it can't run while in the air", BehaviorTypesWrapper::BehaviorIDToString(id));
+    
+  }
+}
 
 }
 }

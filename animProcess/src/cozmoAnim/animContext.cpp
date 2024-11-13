@@ -24,6 +24,7 @@
 
 namespace Anki {
 namespace Vector {
+namespace Anim {
 
 class ThreadIDInternal : private Util::noncopyable
 {
@@ -34,7 +35,6 @@ public:
 
 AnimContext::AnimContext(Util::Data::DataPlatform* dataPlatform)
   : _dataPlatform(dataPlatform)
-  , _threadIdHolder(new ThreadIDInternal)
   , _locale(new Anki::Util::Locale(Anki::Util::Locale::GetNativeLocale()))
   , _random(new Anki::Util::RandomGenerator())
   , _dataLoader(new RobotDataLoader(this))
@@ -75,18 +75,6 @@ void AnimContext::SetRandomSeed(uint32_t seed)
 }
 
 
-void AnimContext::SetMainThread()
-{
-  _threadIdHolder->_id = Util::GetCurrentThreadId();
-}
-
-
-bool AnimContext::IsMainThread() const
-{
-  return Util::AreCpuThreadIdsEqual( _threadIdHolder->_id, Util::GetCurrentThreadId() );
-}
-
-
 void AnimContext::InitAudio(Util::Data::DataPlatform* dataPlatform)
 {
   // Only set up the audio server if we have a real dataPlatform
@@ -114,5 +102,6 @@ void AnimContext::SetLocale(const std::string & locale)
     _alexa->UpdateLocale(*_locale);
   }
 }
+} // namespace Anim
 } // namespace Vector
 } // namespace Anki

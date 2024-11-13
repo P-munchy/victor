@@ -72,14 +72,10 @@ Result ProtoMessageHandler::Init(CozmoContext* context, const Json::Value& confi
 
   auto versionStateRequestCallback = std::bind(&RobotExternalRequestComponent::GetVersionState, externalRequestComponent, std::placeholders::_1);
   auto batteryStateRequestCallback = std::bind(&RobotExternalRequestComponent::GetBatteryState, externalRequestComponent, std::placeholders::_1);
-  auto sayTextCallback = std::bind(&RobotExternalRequestComponent::SayText, externalRequestComponent, std::placeholders::_1);
-  auto setEyeColorCallback = std::bind(&RobotExternalRequestComponent::SetEyeColor, externalRequestComponent, std::placeholders::_1);
 
   // Subscribe to desired simple events
   _signalHandles.push_back(Subscribe(external_interface::GatewayWrapperTag::kBatteryStateRequest, batteryStateRequestCallback));
   _signalHandles.push_back(Subscribe(external_interface::GatewayWrapperTag::kVersionStateRequest, versionStateRequestCallback));
-  _signalHandles.push_back(Subscribe(external_interface::GatewayWrapperTag::kSayTextRequest, sayTextCallback));
-  _signalHandles.push_back(Subscribe(external_interface::GatewayWrapperTag::kSetEyeColorRequest, setEyeColorCallback));
 
   return RESULT_OK;
 }
@@ -139,7 +135,7 @@ void ProtoMessageHandler::Broadcast(const external_interface::GatewayWrapper& me
   ANKI_CPU_PROFILE("ProtoMH::Broadcast_GatewayWrapper");
 
   DEV_ASSERT(nullptr == _context || _context->IsEngineThread(),
-              "UiMessageHandler.GameToEngineRef.BroadcastOffEngineThread");
+             "UiMessageHandler.GameToEngineRef.BroadcastOffEngineThread");
 
   DeliverToExternal(message);
   _eventMgr.Broadcast(AnkiEvent<external_interface::GatewayWrapper>(
@@ -152,7 +148,7 @@ void ProtoMessageHandler::Broadcast(external_interface::GatewayWrapper&& message
   ANKI_CPU_PROFILE("ProtoMH::BroadcastMove_GatewayWrapper");
 
   DEV_ASSERT(nullptr == _context || _context->IsEngineThread(),
-              "UiMessageHandler.GameToEngineRef.BroadcastOffEngineThread");
+             "UiMessageHandler.GameToEngineRef.BroadcastOffEngineThread");
 
   DeliverToExternal(message);
   _eventMgr.Broadcast(AnkiEvent<external_interface::GatewayWrapper>(

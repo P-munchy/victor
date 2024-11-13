@@ -17,8 +17,11 @@
 #include "micDataTypes.h"
 #include "coretech/common/shared/types.h"
 #include "cozmoAnim/speechRecognizer/speechRecognizerSystem.h"
+#include "util/console/consoleFunction.h"
 #include "util/global/globalDefinitions.h"
+#include "util/helpers/noncopyable.h"
 #include "util/environment/locale.h"
+#include "util/signals/signalHolder.h"
 
 #include "clad/cloud/mic.h"
 #include "clad/robotInterface/messageRobotToEngine.h"
@@ -26,6 +29,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,6 +39,7 @@
 namespace Anki {
   namespace AudioUtil {
     struct SpeechRecognizerCallbackInfo;
+    struct SpeechRecognizerIgnoreReason;
   }
   namespace Vector {
     namespace CloudMic {
@@ -44,7 +49,9 @@ namespace Anki {
       class MicDataInfo;
       class MicDataProcessor;
     }
-    class RobotDataLoader;
+    namespace Anim {
+      class RobotDataLoader;
+    }
     namespace RobotInterface {
       struct MicData;
       struct RobotToEngine;
@@ -65,15 +72,15 @@ namespace Anki {
 namespace Vector {
 namespace MicData {
 
-class MicDataSystem {
+class MicDataSystem : private Util::SignalHolder, private Anki::Util::noncopyable {
 public:
   MicDataSystem(Util::Data::DataPlatform* dataPlatform,
-                const AnimContext* context);
+                const Anim::AnimContext* context);
   ~MicDataSystem();
   MicDataSystem(const MicDataSystem& other) = delete;
   MicDataSystem& operator=(const MicDataSystem& other) = delete;
 
-  void Init(const RobotDataLoader& dataLoader);
+  void Init(const Anim::RobotDataLoader& dataLoader);
 
   MicData::MicDataProcessor* GetMicDataProcessor() const { return _micDataProcessor.get(); }
   SpeechRecognizerSystem* GetSpeechRecognizerSystem() const { return _speechRecognizerSystem.get(); }
@@ -88,6 +95,7 @@ public:
 #if ANKI_DEV_CHEATS
   void SetForceRecordClip(bool newValue) { _forceRecordClip = newValue; }
   void SetLocaleDevOnly(const Util::Locale& locale) { _locale = locale; }
+  void EnableTriggerHistory(bool enable);
 #endif
 
   void ResetMicListenDirection();
@@ -142,10 +150,14 @@ public:
   // sending any data to the cloud; this lasts for a set duration
   bool ShouldSimulateStreaming() const;
 
+  // let's anybody who registered a callback with AddTriggerWordDetectedCallback(...) know that we've heard the
+  // trigger word and are either about to start streaming, or not (either on purpose, or it was cancelled/error)
+  void SetWillStream(bool willStream) const;
+
 
 private:
 
-  const AnimContext* _context;
+  const Anim::AnimContext* _context;
 
   bool IsButtonPressAlexa() const;
 
@@ -202,15 +214,23 @@ private:
   // name is becuase we hardcode the "reason" that we are leaving the pairing screen based on the assumption
   // that this is triggered via a "hey vector" wakeword
   std::atomic<bool> _abortAlexaScreenDueToHeyVector;
+  
+#if ANKI_DEV_CHEATS
+  std::list<Anki::Util::IConsoleFunction> _devConsoleFuncs;
+  bool _devEnableTriggerHistory = true;
+  std::list<Json::Value> _devTriggerResults;
+#endif
 
-  void SetWillStream(bool willStream) const;
-
+  void SetupConsoleFuncs();
   void RecordAudioInternal(uint32_t duration_ms, const std::string& path, MicDataType type, bool runFFT);
   void ClearCurrentStreamingJob();
   float GetIncomingMicDataPercentUsed();
   void SendUdpMessage(const CloudMic::Message& msg);
   
-  void SendTriggerDetectionToWebViz(const AudioUtil::SpeechRecognizerCallbackInfo& info);
+  void SendTriggerDetectionToWebViz(const AudioUtil::SpeechRecognizerCallbackInfo& info,
+                                    const AudioUtil::SpeechRecognizerIgnoreReason& ignoreReason);
+  
+  void SendRecentTriggerDetectionToWebViz(const std::function<void(const Json::Value&)>& sendFunc);
 
   void SendRecognizerDasLog(const AudioUtil::SpeechRecognizerCallbackInfo& info,
                             const char* stateStr) const;

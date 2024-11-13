@@ -14,15 +14,15 @@
  **/
 
 
-#include "coretech/common/engine/array2d_impl.h"
+#include "coretech/common/shared/array2d.h"
 #include "coretech/common/engine/colorRGBA.h"
 #include "coretech/common/engine/jsonTools.h"
 #include "coretech/common/engine/utils/timer.h"
-#include "coretech/vision/shared/compositeImage/compositeImage.h"
 #include "cannedAnimLib/baseTypes/cozmo_anim_generated.h"
 #include "cannedAnimLib/baseTypes/keyframe.h"
 #include "anki/cozmo/shared/cozmoConfig.h"
 #include "clad/robotInterface/messageEngineToRobot.h"
+#include "util/cpuProfiler/cpuProfiler.h"
 #include "util/helpers/quoteMacro.h"
 #include "util/logging/logging.h"
 
@@ -40,7 +40,6 @@ bool has_any_digits(const std::string& s)
 
 namespace Anki {
   namespace Vector {
-    
 #pragma mark -
 #pragma mark IKeyFrame
     
@@ -57,7 +56,7 @@ namespace Anki {
       
     }
     
-    bool IKeyFrame::IsTimeToPlay(TimeStamp_t timeSinceAnimStart_ms) const
+    bool IKeyFrame::IsTimeToPlay(const TimeStamp_t timeSinceAnimStart_ms) const
     {
       return GetTriggerTime_ms() <= timeSinceAnimStart_ms;
     }
@@ -241,306 +240,6 @@ void SafeNumericCast(const FromType& fromVal, ToType& toVal, const char* debugNa
       return RESULT_OK;
     }
     
-#pragma mark -
-#pragma mark SpriteSequenceKeyFrame
-    SpriteSequenceKeyFrame::SpriteSequenceKeyFrame(Vision::SpriteHandle spriteHandle,
-                                                   TimeStamp_t triggerTime_ms, 
-                                                   bool shouldRenderInEyeHue)
-    {
-      if(ANKI_DEV_CHEATS){
-        auto img = spriteHandle->GetSpriteContentsGrayscale();
-        ANKI_VERIFY((img.GetNumRows() == FACE_DISPLAY_HEIGHT) &&
-                    (img.GetNumCols() == FACE_DISPLAY_WIDTH),
-                    "SpriteSequenceKeyFrame.Constructor.ImproperDimensions",
-                    "Expected %d rows and %d cols, received %d rows and %d cols",
-                    img.GetNumRows(), img.GetNumCols(),
-                    FACE_DISPLAY_HEIGHT, FACE_DISPLAY_WIDTH);
-      }
-      Vision::HSImageHandle faceHueAndSaturation = ProceduralFace::GetHueSatWrapper();
-      _compositeImage.reset(new Vision::CompositeImage(faceHueAndSaturation, spriteHandle, !shouldRenderInEyeHue));
-      _keyframeActiveDuration_ms = ANIM_TIME_STEP_MS;
-      _triggerTime_ms = triggerTime_ms;
-    }
-
-    SpriteSequenceKeyFrame::SpriteSequenceKeyFrame(const Vision::SpriteSequence* const spriteSeq,
-                                                   TimeStamp_t triggerTime_ms, 
-                                                   u32 frameInterval_ms,
-                                                   bool shouldRenderInEyeHue)
-    {
-      Vision::HSImageHandle faceHueAndSaturation = ProceduralFace::GetHueSatWrapper();
-      _compositeImage.reset(new Vision::CompositeImage(faceHueAndSaturation, spriteSeq, !shouldRenderInEyeHue));
-      _triggerTime_ms = triggerTime_ms;
-      _internalUpdateInterval_ms = frameInterval_ms;
-      _keyframeActiveDuration_ms = spriteSeq->GetNumFrames() * _internalUpdateInterval_ms;
-      ANKI_VERIFY((_internalUpdateInterval_ms != 0) &&
-                  ((_internalUpdateInterval_ms % ANIM_TIME_STEP_MS) == 0),
-                  "SpriteSequenceKeyFrame.SetCompositeImage.InvalidTimeStep",
-                  "Update interval %d is not a multiple of anim time step %d",
-                  _internalUpdateInterval_ms, ANIM_TIME_STEP_MS);
-    }
-
-    SpriteSequenceKeyFrame::SpriteSequenceKeyFrame(Vision::SpriteCache* spriteCache, 
-                                                   Vision::CompositeImage* compImg, 
-                                                   u32 frameInterval_ms,
-                                                   bool shouldRenderInEyeHue)
-    {
-      Vision::HSImageHandle faceHueAndSaturation = ProceduralFace::GetHueSatWrapper();
-      _compositeImage = std::make_unique<Vision::CompositeImage>(spriteCache, faceHueAndSaturation, !shouldRenderInEyeHue);
-      _compositeImage.reset(compImg);
-      _internalUpdateInterval_ms = frameInterval_ms;
-      ANKI_VERIFY((_internalUpdateInterval_ms != 0) &&
-                  ((_internalUpdateInterval_ms % ANIM_TIME_STEP_MS) == 0),
-                  "SpriteSequenceKeyFrame.SetCompositeImage.InvalidTimeStep",
-                  "Update interval %d is not a multiple of anim time step %d",
-                  _internalUpdateInterval_ms, ANIM_TIME_STEP_MS);
-    }
-
-    SpriteSequenceKeyFrame::SpriteSequenceKeyFrame(const SpriteSequenceKeyFrame& other)
-    {
-      _triggerTime_ms            = other._triggerTime_ms;
-      _keyframeActiveDuration_ms = other._keyframeActiveDuration_ms;
-      _internalUpdateInterval_ms = other._internalUpdateInterval_ms;
-      _compositeImageUpdated     = other._compositeImageUpdated;
-      _compositeImageUpdateMap   = other._compositeImageUpdateMap;
-      
-      if(other._compositeImage != nullptr){
-        _compositeImage.reset(new Vision::CompositeImage(*other._compositeImage));
-      }
-    }
-
-    SpriteSequenceKeyFrame::~SpriteSequenceKeyFrame()
-    {
-
-    }
-    
-    bool SpriteSequenceKeyFrame::operator==(const SpriteSequenceKeyFrame& other) const{
-      return (GetTriggerTime_ms() == other.GetTriggerTime_ms()) &&
-      (GetKeyframeDuration_ms() == other.GetKeyframeDuration_ms()) &&
-      (_compositeImageUpdated == other._compositeImageUpdated) &&
-      (*_compositeImage == *other._compositeImage) &&
-      (_internalUpdateInterval_ms  == other._internalUpdateInterval_ms);
-    }
-    
-    
-    Result SpriteSequenceKeyFrame::SetMembersFromJson(const Json::Value &jsonRoot, const std::string& animNameDebug)
-    {
-      DEV_ASSERT(false, "SpriteSequenceKeyframe.SetMembersFromJSON.ThisFunctionNotSupported.BuildKeyframeDirectly");
-      return RESULT_FAIL;
-    }
-
-
-    bool SpriteSequenceKeyFrame::ParseSequenceNameFromString(const Vision::SpritePathMap* spriteMap,
-                                                             const std::string& sequenceName, 
-                                                             Vision::SpriteName& outName)
-    {
-      // sequenceName is only the folder name - manually check all entries in sprite map
-      // so that just the folder name is pulled out of the full path to try and find a match
-      bool foundMatch = false;
-      for(const auto& key : spriteMap->GetAllKeys()){
-        const auto& fullPath = spriteMap->GetValue(key);
-        const auto& fileName = Util::FileUtils::GetFileName(fullPath);
-        if(fileName == sequenceName){
-          foundMatch = true;
-          outName = key;
-          break;
-        }
-      }
-
-      if(foundMatch){
-        const bool isValidSequence = Vision::IsSpriteSequence(outName, false);
-        ANKI_VERIFY(isValidSequence,
-                    "SpriteSequenceKeyFrame.SetMembersFromJson.InvalidSequence",
-                    "Sprite %s is not marked as a sprite sequence",
-                    SpriteNameToString(outName));
-      }
-
-      return foundMatch;
-    }
-
-
-    TimeStamp_t SpriteSequenceKeyFrame::GetKeyframeDuration_ms() const
-    {
-      if(!SequenceShouldAdvance() ){
-        return std::numeric_limits<TimeStamp_t>::max() - _triggerTime_ms;
-      }
-      
-      const TimeStamp_t loopTime = (_compositeImage->GetFullLoopLength() * _internalUpdateInterval_ms);
-      const TimeStamp_t longestDuration = loopTime > _keyframeActiveDuration_ms ? loopTime : _keyframeActiveDuration_ms;
-      return longestDuration;
-    }
-    
-    bool SpriteSequenceKeyFrame::HaveKeyframeForTimeStamp(const TimeStamp_t timeSinceAnimStart_ms) const
-    {
-      return (timeSinceAnimStart_ms < GetTimestampActionComplete_ms()) &&
-             ((timeSinceAnimStart_ms % _internalUpdateInterval_ms) <= ANIM_TIME_STEP_MS);
-    }
-
-
-    void SpriteSequenceKeyFrame::ApplyCompositeImageUpdate(const TimeStamp_t timeSinceAnimStart_ms,
-                                                           CompositeImageUpdateSpec&& updateSpec)
-    {
-      auto& compImg = GetCompositeImage();
-      auto* layer = compImg.GetLayerByName(updateSpec.layerName);
-      const auto currentFrameNumber = GetFrameNumberForTime(timeSinceAnimStart_ms);
-      Vision::CompositeImageLayer::SpriteEntry entry(updateSpec.spriteCache, updateSpec.seqContainer, 
-                                                      updateSpec.spriteName, currentFrameNumber);
-      if(layer != nullptr){
-        // clear the whole layer if no sprite box name specified
-        if(updateSpec.spriteBox.spriteBoxName == Vision::SpriteBoxName::Count){
-          compImg.ClearLayerByName(updateSpec.layerName);
-          PRINT_NAMED_INFO("AnimationStreamer.UpdateCompositeImage.ClearingLayer", 
-                           "Layer %s cleared from image because spriteBox with count value received",
-                           LayerNameToString(updateSpec.layerName));
-        }else{
-          layer->AddToLayout(updateSpec.spriteBox.spriteBoxName, updateSpec.spriteBox);
-          layer->AddToImageMap(updateSpec.spriteBox.spriteBoxName, entry);
-        }
-      }else{
-
-        Vision::CompositeImageLayer layer(updateSpec.layerName);
-        layer.AddToLayout(updateSpec.spriteBox.spriteBoxName, updateSpec.spriteBox);
-
-        layer.AddToImageMap(updateSpec.spriteBox.spriteBoxName, entry);
-        compImg.AddLayer(std::move(layer));
-        PRINT_NAMED_INFO("AnimationStreamer.UpdateCompositeImage.AddingLayer",
-                         "Layer %s added to composite image",
-                         LayerNameToString(updateSpec.layerName));
-      }
-    }
-
-
-    bool SpriteSequenceKeyFrame::ExtractDataFromFlatBuf(const CozmoAnim::FaceAnimation* faceAnimKeyframe,
-                                                        const Vision::SpritePathMap* spriteMap,
-                                                        Vision::SpriteSequenceContainer* seqContainer,
-                                                        const Vision::SpriteSequence*& outSeq,
-                                                        TimeStamp_t& triggerTime_ms)
-    {
-      DEV_ASSERT(faceAnimKeyframe != nullptr, "SpriteSequenceKeyFrame.DefineFromFlatBuf.NullAnim");
-      auto seqNameStr = faceAnimKeyframe->animName()->str();
-      Vision::SpriteName seqName = Vision::SpriteName::Count;
-      const bool success = ParseSequenceNameFromString(spriteMap, seqNameStr, seqName);
-      if(success){
-        outSeq = seqContainer->GetSequenceAgnostic(seqName, seqNameStr);
-      }else{
-        outSeq = seqContainer->GetUnmappedSequenceByFileName(seqNameStr);
-      }
-
-      SafeNumericCast(faceAnimKeyframe->triggerTime_ms(),  triggerTime_ms, seqNameStr.c_str());
-      return success;
-    }
-
-    bool SpriteSequenceKeyFrame::ExtractDataFromJson(const Json::Value &jsonRoot,
-                                                     const Vision::SpritePathMap* spriteMap,
-                                                     Vision::SpriteSequenceContainer* seqContainer,
-                                                     const Vision::SpriteSequence*& outSeq,
-                                                     TimeStamp_t& triggerTime_ms, 
-                                                     TimeStamp_t& frameUpdateInterval)
-    {
-      // Get the sprite sequence
-      {
-        std::string strSeqName = JsonTools::ParseString(jsonRoot, "animName", "SpriteSequenceKeyframe.MissingName");
-
-        // TODO: Take this out once root path is part of AnimationTool!
-        size_t lastSlash = strSeqName.find_last_of("/");
-        if(lastSlash != std::string::npos) {
-          PRINT_NAMED_WARNING("SpriteSequenceKeyFrame.Process",
-                              "Removing path from animation name: %s",
-                              strSeqName.c_str());
-          strSeqName = strSeqName.substr(lastSlash+1, std::string::npos);
-        }
-        
-        Vision::SpriteName seqName = Vision::SpriteName::Count;
-        const bool success = ParseSequenceNameFromString(spriteMap, strSeqName, seqName);
-        if(success){
-          outSeq = seqContainer->GetSequenceAgnostic(seqName, strSeqName);
-        }else{
-          outSeq = seqContainer->GetUnmappedSequenceByFileName(strSeqName);
-        }
-      }
-
-      JsonTools::GetValueOptional(jsonRoot, "frameDuration_ms", frameUpdateInterval);
-      JsonTools::GetValueOptional(jsonRoot, "triggerTime_ms", triggerTime_ms);
-
-      return outSeq != nullptr;
-    }
-
-    void SpriteSequenceKeyFrame::QueueCompositeImageUpdate(CompositeImageUpdateSpec&& updateSpec,
-                                                           u32 applyAt_ms)
-    {
-      _compositeImageUpdateMap.emplace(applyAt_ms, std::move(updateSpec));
-      _compositeImageUpdated = true;
-    }
-
-
-    bool SpriteSequenceKeyFrame::NewImageContentAvailable(const TimeStamp_t timeSinceAnimStart_ms) const
-    {
-      if(IsFirstKeyframeTick(timeSinceAnimStart_ms)){
-        return true;
-      }
-
-      const bool timeToAdvanceFrame = (_compositeImage->GetFullLoopLength() > 1) && 
-                                      ((timeSinceAnimStart_ms % _internalUpdateInterval_ms) == 0);
-      const bool updatesForCurrentFrame = !_compositeImageUpdateMap.empty() &&
-                                          (_compositeImageUpdateMap.begin()->first <= timeSinceAnimStart_ms);
-      return _compositeImageUpdated ||timeToAdvanceFrame || updatesForCurrentFrame;      
-    }
-
-    
-    bool SpriteSequenceKeyFrame::GetFaceImageHandle(const TimeStamp_t timeSinceAnimStart_ms, Vision::SpriteHandle& handle)
-    {
-      if(GetTimestampActionComplete_ms() <= timeSinceAnimStart_ms) {
-        return false;
-      }
-
-      // Apply any composite image updates queued
-      auto iter = _compositeImageUpdateMap.begin();
-      while(iter != _compositeImageUpdateMap.end()){
-        if(iter->first <= timeSinceAnimStart_ms){
-          auto updateSpec = iter->second;
-          ApplyCompositeImageUpdate(timeSinceAnimStart_ms, std::move(updateSpec));
-          // erase element/move iterator
-          _compositeImageUpdateMap.erase(iter);
-          iter = _compositeImageUpdateMap.begin();
-          _compositeImageUpdated = true;
-        }else{
-          break;
-        }
-      }
-      
-      u32 curFrame = GetFrameNumberForTime(timeSinceAnimStart_ms);
-
-      if((HaveKeyframeForTimeStamp(timeSinceAnimStart_ms)) ||
-         _compositeImageUpdated){
-        auto* img = new Vision::ImageRGBA(_compositeImage->GetHeight(),
-                                          _compositeImage->GetWidth());
-        img->FillWith(Vision::PixelRGBA());
-        _compositeImage->OverlayImageWithFrame(*img, curFrame);
-        handle = std::make_shared<Vision::SpriteWrapper>(img);
-        _compositeImageUpdated = false;
-        return true;
-      }else{
-        return false;
-      }
-    }
-    
-    void SpriteSequenceKeyFrame::OverrideShouldRenderInEyeHue(bool shouldRenderInEyeHue)
-    {
-      auto renderMethod = shouldRenderInEyeHue ? Vision::SpriteRenderMethod::CustomHue : Vision::SpriteRenderMethod::RGBA;
-      _compositeImage->OverrideRenderMethod(renderMethod);
-    }
-
-
-    void SpriteSequenceKeyFrame::CacheInternalSprites(Vision::SpriteCache* cache, const TimeStamp_t endTime_ms)
-    {
-      _compositeImage->CacheInternalSprites(cache, endTime_ms);
-    }
-
-    bool SpriteSequenceKeyFrame::AllowProceduralEyeOverlays() const
-    {
-      return _compositeImage->GetLayerByName(Vision::LayerName::Procedural_Eyes) != nullptr;
-    }
-
-
 #pragma mark -
 #pragma mark ProceduralFaceKeyFrame
     
@@ -1453,6 +1152,6 @@ _streamMsg.lights[__LED_NAME__].offset_ms = 0; } while(0)
         return new RobotInterface::EngineToRobot(_streamMsg);
       }
     #endif
-    
+
   } // namespace Vector
 } // namespace Anki

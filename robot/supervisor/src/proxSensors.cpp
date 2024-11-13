@@ -12,6 +12,7 @@
 #include "localization.h"
 #include "anki/cozmo/robot/logging.h"
 #include "anki/cozmo/shared/cozmoConfig.h"
+#include "anki/cozmo/shared/factory/emrHelper.h"
 
 #include <array>
 
@@ -108,6 +109,13 @@ namespace Anki {
       ProxSensorDataRaw GetProxData()
       {
         auto proxData = HAL::GetRawProxData();
+
+        if(IsWhiskey())
+        {
+          proxData.distance_mm = 0;
+          return proxData;
+        }
+        
 #ifndef SIMULATOR
         // Apply look-up table to convert from raw distance reading
         // to corrected reading. Piecewise linear interpolation.
@@ -150,15 +158,7 @@ namespace Anki {
       {
         // Update all cliff values
         for (int i=0 ; i < _nCliffSensors ; i++) {
-          u16 rawVal = HAL::GetRawCliffData(static_cast<HAL::CliffID>(i));
-          if (rawVal == 0 && !IMUFilter::IsPickedUp()) {
-            // Note: Warning can appear falsely if placed on an edge
-            //       with one or two cliff sensors hanging over it.
-            //       Otherwise, it may be indicative of spine/syscon issues.
-            AnkiWarn("ProxSensors.UpdateCliff.BadZeroCliffValue", "Index %d", i);
-          } else {
-            _cliffVals[i] = rawVal;
-          }
+          _cliffVals[i] = HAL::GetRawCliffData(static_cast<HAL::CliffID>(i));
         }
 
         // Compute bounds on cliff detect/undetect thresholds which may be adjusted according to the

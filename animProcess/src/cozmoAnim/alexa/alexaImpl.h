@@ -47,6 +47,8 @@
 #include <Alerts/AlertObserverInterface.h>
 #include <CBLAuthDelegate/CBLAuthRequesterInterface.h>
 #include <AVSCommon/AVS/IndicatorState.h>
+#include <Settings/DeviceSettingsManager.h>
+#include <Settings/SettingCallbacks.h>
 
 #include <functional>
 #include <string>
@@ -79,7 +81,9 @@ class AlexaClient;
 class AlexaKeywordObserver;
 class AlexaMediaPlayer;
 class AlexaObserver;
-class AnimContext;
+namespace Anim {
+  class AnimContext;
+}
 
 class AlexaImpl : private Util::noncopyable
 {
@@ -91,7 +95,7 @@ public:
   
   // Starts an async init thread that when complete runs a callback on the same thread as callers to Update()
   using InitCompleteCallback = std::function<void(bool initSuccessful)>;
-  void Init( const AnimContext* context, InitCompleteCallback&& completionCallback );
+  void Init( const Anim::AnimContext* context, InitCompleteCallback&& completionCallback );
   
   // If true, the sdk is ready to go (but may not be connected yet)
   bool IsInitialized() const { return _initState == InitState::Completed; }
@@ -152,7 +156,7 @@ private:
   
   std::vector<std::shared_ptr<std::istream>> GetConfigs() const;
   
-  void OnDirective(const std::string& directive, const std::string& payload);
+  void OnDirective(const std::string& directive, const std::string& payload, const std::string& fullUnparsed);
   
   void SetAuthState( AlexaAuthState state, const std::string& url, const std::string& code, bool errFlag );
   
@@ -161,6 +165,7 @@ private:
 
   void SetNetworkConnectionError();
   void SetNetworkError( AlexaNetworkErrorType errorType );
+  bool InteractedRecently() const;
   
   // things we care about called by AlexaObserver
   void OnDialogUXStateChanged( DialogUXState state );
@@ -184,10 +189,12 @@ private:
   // if the watchdog fires, this function attempts to remedy the situation
   void AttemptToFixStuckInSpeakingBug();
   
+  void FailInitialization( const std::string& reason );
+  
   // readable version int
   alexaClientSDK::avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion GetFirmwareVersion() const;
   
-  const AnimContext* _context = nullptr;
+  const Anim::AnimContext* _context = nullptr;
   std::string _alexaPersistentFolder;
   std::string _alexaCacheFolder;
   
@@ -238,6 +245,8 @@ private:
   
   std::shared_ptr<alexaClientSDK::capabilitiesDelegate::CapabilitiesDelegate> _capabilitiesDelegate;
   
+  std::shared_ptr<alexaClientSDK::settings::SettingCallbacks<alexaClientSDK::settings::DeviceSettingsManager>> _settingsCallbacks;
+  
   std::shared_ptr<AlexaMediaPlayer> _ttsMediaPlayer;
   std::shared_ptr<AlexaMediaPlayer> _alertsMediaPlayer;
   std::shared_ptr<AlexaMediaPlayer> _audioMediaPlayer;
@@ -273,6 +282,7 @@ private:
   std::thread _initThread;
   
   std::atomic<bool> _runSetNetworkConnectionError;
+  std::atomic<uint64_t> _lastInteractionTime_ms;
 
 #if ANKI_DEV_CHEATS
   static DevShutdownChecker _shutdownChecker;

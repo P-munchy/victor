@@ -33,7 +33,7 @@
 #include "engine/robotDataLoader.h"
 #include "engine/robotInterface/messageHandler.h"
 #include "engine/robotManager.h"
-#include "engine/util/transferQueue/transferQueueMgr.h"
+#include "engine/robotTest.h"
 #include "engine/utils/cozmoExperiments.h"
 #include "engine/utils/parsingConstants/parsingConstants.h"
 #include "engine/viz/vizManager.h"
@@ -115,8 +115,8 @@ static int GetEngineStatsWebServerImpl(WebService::WebService::Request* request)
   ss << (batteryComponent.IsCharging() ? "true" : "false") << '\n';
   ss << (batteryComponent.IsOnChargerContacts() ? "true" : "false") << '\n';
   ss << (batteryComponent.IsOnChargerPlatform() ? "true" : "false") << '\n';
-  ss << std::to_string(static_cast<int>(batteryComponent.GetFullyChargedTimeSec())) << '\n';
-  ss << std::to_string(static_cast<int>(batteryComponent.GetLowBatteryTimeSec())) << '\n';
+  ss << std::to_string(static_cast<int>(batteryComponent.GetTimeAtLevelSec(BatteryLevel::Full))) << '\n';
+  ss << std::to_string(static_cast<int>(batteryComponent.GetTimeAtLevelSec(BatteryLevel::Low))) << '\n';
 
   const auto& robotState = robot->GetRobotState();
 
@@ -149,13 +149,7 @@ static int GetEngineStatsWebServerImpl(WebService::WebService::Request* request)
      << cliffSensorComponent.IsWhiteDetected(static_cast<CliffSensor>(2)) << ' '
      << cliffSensorComponent.IsWhiteDetected(static_cast<CliffSensor>(3)) << '\n';
 
-  const auto& proxSensorComponent = robot->GetProxSensorComponent();
-  const auto& proxDataRaw = proxSensorComponent.GetLatestProxDataRaw();
-  ss << std::fixed << std::setprecision(3) << proxDataRaw.signalIntensity << '\n';
-  ss << std::fixed << std::setprecision(3) << proxDataRaw.ambientIntensity << '\n';
-  ss << std::fixed << std::setprecision(3) << proxDataRaw.spadCount << '\n';
-  ss << proxDataRaw.distance_mm << '\n';
-  ss << RangeStatusToString(proxDataRaw.rangeStatus) << '\n';
+  ss << robot->GetProxSensorComponent().GetDebugString() << '\n';
 
   ss << robotState.carryingObjectID << '\n';
   ss << robotState.carryingObjectOnTopID << '\n';
@@ -167,6 +161,13 @@ static int GetEngineStatsWebServerImpl(WebService::WebService::Request* request)
   const auto& micDirectionHistory = robot->GetMicComponent().GetMicDirectionHistory();
   ss << micDirectionHistory.GetRecentDirection() << '\n';
   ss << micDirectionHistory.GetSelectedDirection() << '\n';
+
+  const auto& visionComp = robot->GetVisionComponent();
+  const TimeStamp_t framePeriod_ms = visionComp.GetFramePeriod_ms();
+  const TimeStamp_t procPeriod_ms = visionComp.GetProcessingPeriod_ms();
+  
+  ss << std::fixed << std::setprecision(3) << 1.f / Util::MilliSecToSec((f32)framePeriod_ms) << '\n';
+  ss << std::fixed << std::setprecision(3) << 1.f / Util::MilliSecToSec((f32)procPeriod_ms) << '\n';
 
   request->_result = ss.str();
 
@@ -212,17 +213,7 @@ CozmoEngine::CozmoEngine(Util::Data::DataPlatform* dataPlatform)
     Anki::Util::gTickTimeProvider = BaseStationTimer::getInstance();
   }
 
-  //
-  // The "engine thread" is meant to be the one Update is run on. However, on some systems, some messaging
-  // happens during Init which is on one thread, then later, a different thread runs the updates. This will
-  // trigger asserts because more than one thread is sending messages. To work around this, we consider the
-  // "engine thread" to be whatever thread Init is called from, until the first call of Update, at which point
-  // we switch our notion of "engine thread" to the updating thread.
-  //
-  // During shutdown, the "engine thread" may switch again so messages can be sent by the thread performing shutdown.
-  // This happens AFTER stopping the update thread, so we can still guarantee that no other threads are allowed
-  // to send messages.
-  //
+  // Designate this thread as the one from which the engine can broadcast messages
   _context->SetEngineThread();
 
   DASMSG(engine_language_locale, "engine.language_locale", "Prints out the language locale of the robot");
@@ -340,11 +331,14 @@ Result CozmoEngine::Init(const Json::Value& config) {
   _context->SetRandomSeed(seed);
 
   const auto& webService = _context->GetWebService();
-  webService->Start(_context->GetDataPlatform(),
+  const auto& dataPlatform = _context->GetDataPlatform();
+
+  webService->Start(dataPlatform,
                     _context->GetDataLoader()->GetWebServerEngineConfig());
   webService->RegisterRequestHandler("/getenginestats", GetEngineStatsWebServerHandler, this);
 
-  _context->GetPerfMetric()->Init(_context->GetDataPlatform(), _context->GetWebService());
+  _context->GetPerfMetric()->Init(dataPlatform, webService);
+  _context->GetRobotTest()->Init(dataPlatform, webService);
 
   LOG_INFO("CozmoEngine.Init.Version", "2");
 
@@ -355,9 +349,9 @@ Result CozmoEngine::Init(const Json::Value& config) {
   // data: Unused
   Anki::Util::sInfo("cozmo_engine.init.build_configuration", {},
 #if defined(NDEBUG)
-                     "RELEASE");
+                    "RELEASE");
 #else
-                     "DEBUG");
+                    "DEBUG");
 #endif
 
   _isInitialized = true;
@@ -369,29 +363,25 @@ Result CozmoEngine::Update(const BaseStationTime_t currTime_nanosec)
 {
   ANKI_CPU_PROFILE("CozmoEngine::Update");
 
-  if(!_isInitialized) {
+  if (!_isInitialized) {
     PRINT_NAMED_ERROR("CozmoEngine.Update", "Cannot update CozmoEngine before it is initialized.");
     return RESULT_FAIL;
   }
 
-  // This is a bit of a hack, but on some systems the thread that calls Update is different from the thread
-  // that does all of the setup. This flag assures that we set the "main" thread to be the one that's going to
-  // be doing the updating.
-  if( !_hasRunFirstUpdate ) {
+  if (!_hasRunFirstUpdate) {
+    _hasRunFirstUpdate = true;
+
+    // Designate this as the thread from which engine can broadcast messages
     _context->SetEngineThread();
 
     // Controls OpenCV's built-in multithreading for the calling thread, so we have to do this on the first
     // call to update due to the threading quirk
     Result cvResult = SetNumOpencvThreads(NUM_OPENCV_THREADS, "CozmoEngine.Init");
-    if( RESULT_OK != cvResult )
+    if (RESULT_OK != cvResult)
     {
       return cvResult;
     }
-
-    _hasRunFirstUpdate = true;
   }
-
-  DEV_ASSERT(_context->IsEngineThread(), "CozmoEngine.UpdateOnWrongThread" );
 
   _uiMsgHandler->ResetMessageCounts();
   _protoMsgHandler->ResetMessageCounts();
@@ -399,6 +389,8 @@ Result CozmoEngine::Update(const BaseStationTime_t currTime_nanosec)
   _context->GetVizManager()->ResetMessageCount();
 
   _context->GetWebService()->Update();
+
+  _context->GetRobotTest()->Update();
 
   // Handle UI
   if (!_uiWasConnected && _uiMsgHandler->HasDesiredNumUiDevices()) {

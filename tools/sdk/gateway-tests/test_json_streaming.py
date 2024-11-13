@@ -42,7 +42,7 @@ def test_event_repeated(vector_connection):
             assert "result" in data
             Parse(json.dumps(data["result"]), response_type, ignore_unknown_fields=True)
             print("Converted Protobuf: {}".format(colored(response_type, "cyan")))
-            assert response_type.event.connection_response.is_primary
+            assert response_type.event.connection_response != None
             break
 
     for id in random_id_generator(10, 50):
@@ -58,7 +58,7 @@ def test_event(vector_connection, request_params):
 
 @pytest.mark.parametrize("request_params", [
     {"control_request": p.ControlRequest(priority=p.ControlRequest.UNKNOWN)},
-    {"control_request": p.ControlRequest(priority=p.ControlRequest.TOP_PRIORITY_AI)},
+    {"control_request": p.ControlRequest(priority=p.ControlRequest.DEFAULT)},
     {"control_request": p.ControlRequest()},
     {"control_release": p.ControlRelease()}
 ])

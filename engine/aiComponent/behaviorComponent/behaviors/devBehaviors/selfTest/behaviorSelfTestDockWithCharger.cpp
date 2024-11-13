@@ -14,6 +14,7 @@
 
 #include "engine/actions/chargerActions.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/components/battery/batteryComponent.h"
 #include "engine/robot.h"
 
@@ -67,9 +68,11 @@ Result BehaviorSelfTestDockWithCharger::OnBehaviorActivatedInternal()
 
     const bool useCliffSensorCorrection = true;
     const bool enableDockingAnims = false;
+    const bool doPositionCheckOnPathCompletion = false;
     DriveToAndMountChargerAction* action = new DriveToAndMountChargerAction(object->GetID(),
                                                                             useCliffSensorCorrection,
-                                                                            enableDockingAnims);
+                                                                            enableDockingAnims,
+                                                                            doPositionCheckOnPathCompletion);
 
     DelegateIfInControl(action, [this](){ TransitionToOnChargerChecks(); });
   }

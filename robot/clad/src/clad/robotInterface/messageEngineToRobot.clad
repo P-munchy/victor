@@ -13,7 +13,6 @@
 #include "clad/types/controllerChannels.clad"
 #include "clad/types/dockingSignals.clad"
 #include "clad/types/imu.clad"
-#include "clad/types/keepFaceAliveParameters.clad"
 #include "clad/types/lcdTypes.clad"
 #include "clad/types/ledTypes.clad"
 #include "clad/types/motorTypes.clad"
@@ -23,6 +22,8 @@
 #include "clad/types/robotTestModes.clad"
 #include "clad/types/switchboardToRobot.clad"
 #include "clad/types/textToSpeechTypes.clad"
+#include "clad/types/tofDisplayTypes.clad"
+#include "clad/types/sdkAudioTypes.clad"
 
 namespace Anki {
 namespace Vector {
@@ -212,7 +213,6 @@ message EngineFullyLoaded
 message CalmPowerMode
 {
   bool enable,
-  bool calibOnDisable,
 }
 
 // Tells syscon to pull the plug
@@ -341,15 +341,11 @@ message EnableKeepFaceAlive
   bool    enable
 }
 
-message SetDefaultKeepFaceAliveParameters
+// Enable/disable "focused" mode for KeepFaceAlive, which limits the eye dart distance to keep the
+// eyes roughly centered (but still moving, rather than "dead" still)
+message SetKeepFaceAliveFocus
 {
-}
-
-message SetKeepFaceAliveParameter
-{
-  float_32               value,
-  KeepFaceAliveParameter param,
-  bool                   setToDefault = 0, // If true, value is ignored
+  bool enable
 }
 
 message AddOrUpdateEyeShift
@@ -443,7 +439,7 @@ message StartPlaybackAudio
 message StartWakeWordlessStreaming
 {
   uint_8 streamType,
-  bool   playGetInFromAnimProcess 
+  bool   playGetInFromAnimProcess
 }
 
 message SetTriggerWordResponse
@@ -477,17 +473,6 @@ message SetAlexaUsage
   bool optedIn
 }
 
-enum uint_8 CancelAlexaFromEngineReason
-{
-  AppDisconnect
-}
-
-message CancelPendingAlexaAuth
-{
-  // reason of cancellation (for DAS message)
-  CancelAlexaFromEngineReason reason
-}
-
 structure ColorRGB
 {
   uint_8 r,
@@ -508,6 +493,10 @@ message DrawTextOnScreen
 message ShowUrlFace
 {
   bool show
+}
+
+message ExitCCScreen
+{
 }
 
 // Switch to the debug screen used for the vision system's "MirrorMode"
@@ -541,31 +530,35 @@ message SetButtonWakeWord
     bool isAlexa,
 }
 
-// Play animation as part of a composite image
-// Image chunks are sent separately
-message PlayCompositeAnimation
+structure SpriteBoxRemap
 {
-  uint_32 compositeImageID, // Link to composite image chunks
-  uint_8  tag,
-  string  animName,
+  Vision::SpriteBoxName spriteBoxName,
+  uint_8                padding,
+  uint_16               remappedAssetID
 }
 
-message DisplayCompositeImageChunk
+message PlayAnimWithSpriteBoxRemaps
 {
-  uint_32 compositeImageID, // Ensures chunks are for the same image
-  uint_32 get_frame_interval_ms, // Interval at which to call Composite Image's GetFrame
-  uint_32 duration_ms,      // Use uint_32 max value to keep the image on the screen
-  Vision::CompositeImageChunk compositeImageChunk
+  uint_8         tag,
+  uint_8         numRemaps,
+  SpriteBoxRemap spriteBoxRemaps[150],
+  bool           lockFaceAtEndOfAnim,
+  string         animName
 }
 
-message UpdateCompositeImage
+message PlayAnimWithSpriteBoxKeyFrames
 {
-  Vision::SerializedSpriteBox serializedSpriteBox, // SpriteBox named count indicates clear the whole layer
-  uint_32                     applyAt_ms, // specify the time in ms from the start of the animation that the update should be applied
-  Vision::LayerName           layerName,
-  Vision::SpriteName          spriteName // Use Count to indicate erase sprite
+  Vision::SpriteBoxKeyFrame spriteBoxKeyFrames[40],
+  uint_8                    tag,
+  uint_8                    numKeyFrames,
+  string                    animName
 }
 
+message AddSpriteBoxKeyFrames
+{
+  Vision::SpriteBoxKeyFrame spriteBoxKeyFrames[50],
+  uint_8                    numKeyFrames,
+}
 
 // TODO: Move to messageGameToEngine.clad or shared file
 // DisplayFaceImageBinaryChunk
@@ -622,7 +615,8 @@ message RunDebugConsoleFuncMessage {
 //
 message TextToSpeechPrepare {
   AudioMetaData::SwitchState::Robot_Vic_External_Processing style, // Audio processing style
-  float_32 durationScalar,             // Duration adjustment
+  float_32 durationScalar,             // Duration adjustment (0.5 = slow, 5.0 = fast)
+  float_32 pitchScalar,                // Pitch adjustment (-1.0 = low, +1.0 = high)
   TextToSpeechTriggerMode triggerMode, // Trigger mode
   uint_8 ttsID,                        // ID of utterance
   int_8 text[1024]                     // Text to be pronounced
@@ -684,10 +678,44 @@ message BatteryStatus {
   bool isCharging,
   bool onChargerContacts,
   bool isBatteryFull,
+  bool isBatteryDisconnected  // happens when it is too hot to charge (needs to cooldown)
+                              // the robot reports charging, when it actually is not
 }
 
 message TriggerBackpackAnimation {
   BackpackAnimationTrigger trigger,
+}
+
+message AcousticTestEnabled {
+  bool enabled,
+}
+
+//
+// Sent from engine to robot (anim process) to prepare for streaming audio data to the robot speaker
+//
+message ExternalAudioPrepare {
+  uint_16 audio_volume,
+  uint_16 audio_rate
+}
+
+//
+// Sent from engine to robot (anim process) to stream audio data to the robot speaker
+//
+message ExternalAudioChunk {
+  uint_16 audio_chunk_size,       //size in bytes
+  uint_16 audio_chunk_data[512]   //16-bit little-endian data
+}
+
+//
+// Sent from engine to robot (anim process) to signal end of streaming data
+//
+message ExternalAudioComplete {
+}
+
+//
+// Sent from engine to robot (anim process) to cancel streaming audio playback
+//
+message ExternalAudioCancel {
 }
 
 // Because we're running low on message tags, expand this enum and message as we add more settings
@@ -703,6 +731,11 @@ message UpdatedSettings {
   SettingBeingChanged settingBeingChanged,
   bool                enableDataCollection,
   string              timeZone,
+}
+
+message RangeDataToDisplay
+{
+  RangeDataDisplay data
 }
 
 // ====================================================
@@ -815,8 +848,8 @@ union EngineToRobot
   DisplayFaceImageBinaryChunk   displayFaceImageBinaryChunk = 0x59,
   DisplayFaceImageRGBChunk      displayFaceImageRGBChunk    = 0x5A,
 
-  SetDefaultKeepFaceAliveParameters setDefaultKeepFaceAliveParameters = 0x5B,
-  SetKeepFaceAliveParameter     setKeepFaceAliveParameter   = 0x5C,
+  // Available                                              = 0x5B,
+  SetKeepFaceAliveFocus         setKeepFaceAliveFocus       = 0x5C,
   EnableKeepFaceAlive           enableKeepFaceAlive         = 0x5D,
   AddOrUpdateEyeShift           addOrUpdateEyeShift         = 0x5E,
   RemoveEyeShift                removeEyeShift              = 0x5F,
@@ -824,9 +857,9 @@ union EngineToRobot
   RemoveSquint                  removeSquint                = 0x61,
 
   DisplayFaceImageGrayscaleChunk   displayFaceImageGrayscaleChunk      = 0x62,
-  DisplayCompositeImageChunk       displayCompositeImageChunk          = 0x63,
-  UpdateCompositeImage             updateCompositeImage                = 0x64,
-  PlayCompositeAnimation           playCompositeAnimation              = 0x65,
+  PlayAnimWithSpriteBoxRemaps      playAnimWithSpriteBoxRemaps         = 0x63,
+  PlayAnimWithSpriteBoxKeyFrames   playAnimWithSpriteBoxKeyFrames      = 0x64, 
+  AddSpriteBoxKeyFrames            addSpriteBoxKeyFrames               = 0x65,
   EnableMirrorModeScreen           enableMirrorModeScreen              = 0x66,
 
   SetButtonWakeWord                setButtonWakeWord                   = 0x67,
@@ -837,8 +870,14 @@ union EngineToRobot
   AudioEngine::Multiplexer::PostAudioSwitchState  postAudioSwitchState = 0x73,
   AudioEngine::Multiplexer::PostAudioParameter    postAudioParameter   = 0x74,
 
+  ExternalAudioPrepare          externalAudioPrepare        = 0x75,
+  ExternalAudioChunk            externalAudioChunk          = 0x76,
+  ExternalAudioComplete         externalAudioComplete       = 0x77,
+  ExternalAudioCancel           externalAudioCancel         = 0x78,
+
   FakeWakeWordFromExternalInterface fakeWakeWordFromExternalInterface = 0x80,
   ShowUrlFace                   showUrlFace                 = 0x81,
+  ExitCCScreen                  exitCCScreen                = 0x82,
 
   SetDebugConsoleVarMessage     setDebugConsoleVarMessage   = 0x90,
   RunDebugConsoleFuncMessage    runDebugConsoleFuncMessage  = 0x91,
@@ -858,26 +897,29 @@ union EngineToRobot
   ResetBeatDetector             resetBeatDetector           = 0x9C,
 
   SetAlexaUsage                 setAlexaUsage               = 0x9D,
-  CancelPendingAlexaAuth        cancelPendingAlexaAuth      = 0x9E,
 
   SwitchboardInterface::SetConnectionStatus     setConnectionStatus = 0xA0,
   SwitchboardInterface::SetBLEPin               setBLEPin                 = 0xA1,
   AlterStreamingAnimationAtTime                 alterStreamingAnimation   = 0xA2,
   SwitchboardInterface::SendBLEConnectionStatus sendBLEConnectionStatus   = 0xA3,
 
-  SelfTestEnd                   selfTestEnd                 = 0xA4,
+  SelfTestEnd               selfTestEnd               = 0xA4,
 
-  SetLCDBrightnessLevel setLCDBrightnessLevel = 0xAA,
+  AcousticTestEnabled       acousticTestEnabled       = 0xA5,
 
-  BatteryStatus batteryStatus = 0xAB,
+  RangeDataToDisplay        rangeDataToDisplay        = 0xA6,
 
-  TriggerBackpackAnimation triggerBackpackAnimation = 0xAC,
+  SetLCDBrightnessLevel     setLCDBrightnessLevel     = 0xAA,
 
-  EngineFullyLoaded engineFullyLoaded = 0xAD,
+  BatteryStatus             batteryStatus             = 0xAB,
 
-  CheckCloudConnectivity checkCloudConnectivity = 0xAE,
+  TriggerBackpackAnimation  triggerBackpackAnimation  = 0xAC,
 
-  UpdatedSettings updatedSettings = 0xAF,
+  EngineFullyLoaded         engineFullyLoaded         = 0xAD,
+
+  CheckCloudConnectivity    checkCloudConnectivity    = 0xAE,
+
+  UpdatedSettings           updatedSettings           = 0xAF,
 
   // 0xB0 to 0xFE: To engine, see messageRobotToEngine.clad
 }

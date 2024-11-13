@@ -8,7 +8,6 @@
 
 // System Includes
 #include <chrono>
-#include <unordered_map>
 #include <assert.h>
 
 // Our Includes
@@ -18,11 +17,14 @@
 #include "anki/cozmo/robot/logEvent.h"
 #include "anki/cozmo/shared/cozmoConfig.h"
 #include "anki/cozmo/shared/factory/faultCodes.h"
+#include "anki/cozmo/shared/factory/emrHelper.h"
 
 #include "../spine/spine.h"
 #include "../spine/cc_commander.h"
 
 #include "schema/messages.h"
+#include "clad/robotInterface/messageRobotToEngine.h"
+#include "clad/robotInterface/messageRobotToEngine_send_helper.h"
 #include "clad/types/proxMessages.h"
 
 #include <errno.h>
@@ -50,6 +52,9 @@ namespace { // "Private members"
     .cliffSense = {800, 800, 800, 800}
   };
 #endif
+  // For storing latest prox data from body
+  ProxSensorDataRaw proxData_;
+  uint16_t lastProxDataSampleCount_ = 0;
 
   // update every tick of the robot:
   // some touch values are 0xFFFF, which we want to ignore
@@ -57,13 +62,14 @@ namespace { // "Private members"
   u16 lastValidTouchIntensity_ = 0;
 
   // Counter for invalid prox sensor readings
-  std::unordered_map<RangeStatus, u32> invalidProxSensorStatusCounts;
+  u32 invalidProxSensorStatusCounts_[(int)RangeStatus::HARDWARE_FAIL + 1] = {0};
+  u32 noUpdateProxSensorStatusCount_ = 0;
   TimeStamp_t nextInvalidProxDataReportSendTime_ms_ = 0;
   const u32 INVALID_PROX_DATA_REPORT_PERIOD_MS = 86400000; // Every 24 hours
 
   HAL::PowerState desiredPowerMode_;
 
-  // Flag to prevent spamming of unexepected power mode warning
+  // Flag to prevent spamming of unexpected power mode warning
   bool reportUnexpectedPowerMode_ = false;
 
   // Time since the desired power mode was last set
@@ -104,6 +110,11 @@ namespace { // "Private members"
 
   VersionInfo _sysconVersionInfo;
 
+  const u32 SELECT_TIMEOUT_SEC = 1;
+  const u32 SELECT_TIMEOUT_ATTEMPTS = 5;
+  const u32 SPINE_GET_FRAME_TIMEOUT_MS = 1000 * SELECT_TIMEOUT_SEC * (SELECT_TIMEOUT_ATTEMPTS + 1);
+  const int* shutdownSignal_ = 0;
+
 } // "private" namespace
 
 // Forward Declarations
@@ -115,6 +126,7 @@ void ProcessIMUEvents();
 void ProcessFailureCode();
 void ProcessTouchLevel(void);
 void ProcessMicError();
+void ProcessProxData();
 void PrintConsoleOutput(void);
 void PrintBodyDataUpdate();
 
@@ -123,7 +135,10 @@ extern "C" {
   ssize_t spine_write_frame(spine_ctx_t spine, PayloadId type, const void* data, int len);
   void record_body_version( const struct VersionInfo* info);
   void request_version(void) {
-    spine_write_frame(&spine_, PAYLOAD_VERSION, NULL, 0);
+    if(_sysconVersionInfo.hw_revision == 0)
+    {
+      spine_write_frame(&spine_, PAYLOAD_VERSION, NULL, 0);
+    }
   }
 }
 
@@ -131,45 +146,59 @@ extern "C" {
 // If it times out too many times then
 // syscon must be hosed or there is no spine
 // connection
-bool check_select_timeout(spine_ctx_t spine)
+bool check_spine_readable(spine_ctx_t spine)
 {
-  int fd = spine_get_fd(spine);
-
   static u8 selectTimeoutCount = 0;
-  if(selectTimeoutCount >= 5)
-  {
-    AnkiError("spine.check_select_timeout.timeoutCountReached","");
+  if (selectTimeoutCount >= SELECT_TIMEOUT_ATTEMPTS) {
+    AnkiError("HAL.check_spine_readable.timeoutCountReached","");
     FaultCode::DisplayFaultCode(FaultCode::SPINE_SELECT_TIMEOUT);
     maxNumSelectTimeoutsReached_ = true;
-    return true;
+    return false;
   }
+
+  const int fd = spine_get_fd(spine);
 
   static fd_set fdSet;
   FD_ZERO(&fdSet);
   FD_SET(fd, &fdSet);
+
   static timeval timeout;
-  timeout.tv_sec = 1;
+  timeout.tv_sec = SELECT_TIMEOUT_SEC;
   timeout.tv_usec = 0;
-  ssize_t s = select(FD_SETSIZE, &fdSet, NULL, NULL, &timeout);
-  if(s == 0)
-  {
-    selectTimeoutCount++;
-    AnkiWarn("spine.check_select_timeout.selectTimedout", "%u", selectTimeoutCount);
-    return true;
+
+  const ssize_t nfds = select(FD_SETSIZE, &fdSet, NULL, NULL, &timeout);
+  if (nfds < 0) {
+    AnkiWarn("HAL.check_spine_readable.error", "select error %s", strerror(errno));
+    return false;
   }
-  return false;
+
+  if (nfds == 0) {
+    selectTimeoutCount++;
+    AnkiWarn("HAL.check_spine_readable.timeout", "select timeout %u", selectTimeoutCount);
+
+    // Let anim know that robot is still alive since we haven't
+    // been sending RobotState messages for the last second.
+    // Otherwise, anim will fault with NO_ROBOT_COMMS
+    RobotInterface::StillAlive msg;
+    RobotInterface::SendMessage(msg);
+
+    return false;
+  }
+
+  return true;
 }
 
 ssize_t robot_io(spine_ctx_t spine)
 {
-  int fd = spine_get_fd(spine);
 
   EventStart(EventType::ROBOT_IO_READ);
 
-  if(check_select_timeout(spine))
-  {
+  if (!check_spine_readable(spine)) {
+    // Spine is not readable at this time
     return -1;
   }
+
+  const int fd = spine_get_fd(spine);
 
   ssize_t r = read(fd, readBuffer_, sizeof(readBuffer_));
 
@@ -227,7 +256,18 @@ void das_log_version_info(const VersionInfo* versionInfo)
   DASMSG_SET(i2, versionInfo->hw_model,    "Hardware model");
   DASMSG_SET(s1, ein,                      "Electronic Identification Number");
   DASMSG_SET(s2, app_version,              "Application version");
+  DASMSG_SET(s3, ANKI_BUILD_SHA,           "Build SHA")
   DASMSG_SEND();
+}
+
+void handle_syscon_version(const VersionInfo* versionInfo)
+{
+  if(memcmp(&_sysconVersionInfo, versionInfo, sizeof(_sysconVersionInfo)) != 0)
+  {
+    _sysconVersionInfo = *versionInfo;
+    record_body_version(versionInfo);
+    das_log_version_info(versionInfo);
+  }
 }
 
 Result spine_wait_for_first_frame(spine_ctx_t spine, const int * shutdownSignal)
@@ -265,9 +305,7 @@ Result spine_wait_for_first_frame(spine_ctx_t spine, const int * shutdownSignal)
       }
       else if (hdr->payload_type == PAYLOAD_VERSION) {
         const VersionInfo* versionInfo = (VersionInfo*)(hdr+1);
-        _sysconVersionInfo = *versionInfo;
-        record_body_version(versionInfo);
-        das_log_version_info(versionInfo);
+        handle_syscon_version(versionInfo);
       }
       else if (hdr->payload_type == PAYLOAD_BOOT_FRAME) {
 
@@ -317,6 +355,10 @@ Result HAL::Init(const int * shutdownSignal)
   // Set ID
   robotID_ = Anki::Vector::DEFAULT_ROBOT_ID;
 
+  shutdownSignal_ = shutdownSignal;
+
+  memset(&_sysconVersionInfo, 0, sizeof(_sysconVersionInfo));
+
   InitIMU();
 
   if (InitRadio() != RESULT_OK) {
@@ -329,14 +371,6 @@ Result HAL::Init(const int * shutdownSignal)
     AnkiInfo("HAL.Init.StartingSpineHAL", "");
 
     nextInvalidProxDataReportSendTime_ms_ = GetTimeStamp() + INVALID_PROX_DATA_REPORT_PERIOD_MS;
-    invalidProxSensorStatusCounts = {
-      {RangeStatus::SIGMA_FAIL, 0},
-      {RangeStatus::SIGNAL_FAIL, 0},
-      {RangeStatus::MIN_RANGE_FAIL, 0},
-      {RangeStatus::PHASE_FAIL, 0},
-      {RangeStatus::HARDWARE_FAIL, 0},
-      {RangeStatus::NO_UPDATE, 0}
-    };
 
     desiredPowerMode_ = POWER_MODE_ACTIVE;
 
@@ -421,9 +455,7 @@ Result spine_get_frame() {
       else if (hdr->payload_type == PAYLOAD_VERSION) {
         LOGD("Handling VR payload type %x\n", hdr->payload_type);
         const VersionInfo* versionInfo = (VersionInfo*)(hdr+1);
-        _sysconVersionInfo = *versionInfo;
-        record_body_version(versionInfo);
-        das_log_version_info(versionInfo);
+        handle_syscon_version(versionInfo);
       }
       else if (hdr->payload_type == PAYLOAD_BOOT_FRAME) {
         populate_boot_body_data(hdr);
@@ -461,32 +493,31 @@ Result spine_get_frame() {
 void ReportRecentInvalidProxDataReadings()
 {
   const TimeStamp_t timeSinceBoot_ms = HAL::GetTimeStamp();
-  if ( (invalidProxSensorStatusCounts.at(RangeStatus::SIGMA_FAIL) +
-        invalidProxSensorStatusCounts.at(RangeStatus::SIGNAL_FAIL) +
-        invalidProxSensorStatusCounts.at(RangeStatus::PHASE_FAIL)) > 0) {
+  if ( (invalidProxSensorStatusCounts_[(int)RangeStatus::SIGMA_FAIL] +
+        invalidProxSensorStatusCounts_[(int)RangeStatus::SIGNAL_FAIL] +
+        invalidProxSensorStatusCounts_[(int)RangeStatus::PHASE_FAIL]) > 0) {
     DASMSG(hal_invalid_prox_reading_report, "hal.invalid_prox_reading_report", "Report the recent number of minor status failures");
     DASMSG_SET(i1, timeSinceBoot_ms, "Time (ms) since last boot")
-    DASMSG_SET(i2, invalidProxSensorStatusCounts.at(RangeStatus::SIGMA_FAIL), "Number of recent sigma failures");
-    DASMSG_SET(i3, invalidProxSensorStatusCounts.at(RangeStatus::SIGNAL_FAIL), "Number of recent signal failures");
-    DASMSG_SET(i4, invalidProxSensorStatusCounts.at(RangeStatus::PHASE_FAIL), "Number of recent phase failures");
+    DASMSG_SET(i2, invalidProxSensorStatusCounts_[(int)RangeStatus::SIGMA_FAIL], "Number of recent sigma failures");
+    DASMSG_SET(i3, invalidProxSensorStatusCounts_[(int)RangeStatus::SIGNAL_FAIL], "Number of recent signal failures");
+    DASMSG_SET(i4, invalidProxSensorStatusCounts_[(int)RangeStatus::PHASE_FAIL], "Number of recent phase failures");
     DASMSG_SEND();
   }
 
-  if ( (invalidProxSensorStatusCounts.at(RangeStatus::MIN_RANGE_FAIL) +
-        invalidProxSensorStatusCounts.at(RangeStatus::HARDWARE_FAIL) +
-        invalidProxSensorStatusCounts.at(RangeStatus::NO_UPDATE)) > 0) {
+  if ( (invalidProxSensorStatusCounts_[(int)RangeStatus::MIN_RANGE_FAIL] +
+        invalidProxSensorStatusCounts_[(int)RangeStatus::HARDWARE_FAIL] +
+        noUpdateProxSensorStatusCount_) > 0) {
     DASMSG(hal_severe_invalid_prox_reading_report, "hal.severe_invalid_prox_reading_report", "Report of recent number of severe status failures");
     DASMSG_SET(i1, timeSinceBoot_ms, "Time (ms) since last boot")
-    DASMSG_SET(i2, invalidProxSensorStatusCounts.at(RangeStatus::MIN_RANGE_FAIL), "Number of recent min range failures");
-    DASMSG_SET(i3, invalidProxSensorStatusCounts.at(RangeStatus::HARDWARE_FAIL), "Number of recent hardware failures");
-    DASMSG_SET(i4, invalidProxSensorStatusCounts.at(RangeStatus::NO_UPDATE), "Number of recent missing updates");
+    DASMSG_SET(i2, invalidProxSensorStatusCounts_[(int)RangeStatus::MIN_RANGE_FAIL], "Number of recent min range failures");
+    DASMSG_SET(i3, invalidProxSensorStatusCounts_[(int)RangeStatus::HARDWARE_FAIL], "Number of recent hardware failures");
+    DASMSG_SET(i4, noUpdateProxSensorStatusCount_, "Number of recent missing updates");
     DASMSG_SEND();
   }
 
   nextInvalidProxDataReportSendTime_ms_ += INVALID_PROX_DATA_REPORT_PERIOD_MS;
-  for (auto& it : invalidProxSensorStatusCounts) {
-    it.second = 0;
-  }
+  memset(invalidProxSensorStatusCounts_, 0, sizeof(invalidProxSensorStatusCounts_));
+  noUpdateProxSensorStatusCount_ = 0;
 }
 
 extern "C"  ssize_t spine_write_ccc_frame(spine_ctx_t spine, const struct ContactData* ccc_payload);
@@ -522,6 +553,14 @@ Result HAL::Step(void)
     if(haveValidSyscon_)
     {
       EventStart(EventType::WRITE_SPINE);
+
+      // Repeatedly request syscon version until we get it
+      // Sometimes the initial request in HAL::Init is lost due to
+      // an "RX Buffer Overrun Detected" or an invalid crc error
+      // This may end up sending some unnecessary requests (2 or 3 of them) as
+      // the response is not immediate
+      request_version();
+
       if (desiredPowerMode_ == POWER_MODE_CALM && !commander_is_active) {
         if (++calmModeSkipFrameCount_ > NUM_CALM_MODE_SKIP_FRAMES) {
           spine_set_lights(&spine_, &(h2bp->lightState));
@@ -568,8 +607,25 @@ Result HAL::Step(void)
 
   EventStart(EventType::READ_SPINE);
 
+  const u32 startSpineGetFrameTime_ms = GetTimeStamp();
   do {
     result = spine_get_frame();
+
+    // It's taking too long to get a frame!
+    // Timeout is tuned to accommodate worst case back-to-back spine select timeouts
+    const u32 timeSinceStartOfGetFrame_ms = GetTimeStamp() - startSpineGetFrameTime_ms;
+    if (timeSinceStartOfGetFrame_ms > SPINE_GET_FRAME_TIMEOUT_MS) {
+      AnkiError("HAL.Step.SpineLoopTimeout", "");
+      return result;
+    }
+
+    // Check for early exit due to shutdown.
+    // But we don't want to exit earlier than 5ms so that subsequent tics
+    // are still processed at least at the normal rate.
+    if (*shutdownSignal_ != 0 && timeSinceStartOfGetFrame_ms > ROBOT_TIME_STEP_MS) {
+      AnkiInfo("HAL.Step.ShuttingDown", "");
+      return RESULT_OK;
+    }
   } while(result != RESULT_OK && result != RESULT_FAIL_IO_TIMEOUT);
 
   EventStop(EventType::READ_SPINE);
@@ -591,6 +647,8 @@ Result HAL::Step(void)
   ProcessMicError();
 
   ProcessTouchLevel(); // filter invalid values from touch sensor
+
+  ProcessProxData();
 
 #if(DEBUG_TOUCH_SENSOR)
   static FILE* fp = nullptr;
@@ -750,6 +808,8 @@ void HAL::MicroWait(u32 microseconds)
 
 TimeStamp_t HAL::GetTimeStamp(void)
 {
+  // Note: steady_clock starts at zero from bootup so realistically this
+  //       should never overflow under normal use.
   auto currTime = std::chrono::steady_clock::now();
   return static_cast<TimeStamp_t>(std::chrono::duration_cast<std::chrono::milliseconds>(currTime.time_since_epoch()).count());
 }
@@ -825,29 +885,56 @@ inline RangeStatus ConvertToApiRangeStatus(const u8 deviceRangeStatus)
 
 ProxSensorDataRaw HAL::GetRawProxData()
 {
-  ProxSensorDataRaw proxData;
-  proxData.rangeStatus = ConvertToApiRangeStatus(bodyData_->proximity.rangeStatus);
-  // Track the occurrences of invalid prox sensor readings, reported on a periodic basis
-  if (proxData.rangeStatus != RangeStatus::RANGE_VALID) {
-    ++invalidProxSensorStatusCounts.at(proxData.rangeStatus);
+  return proxData_;
+}
+
+void ProcessProxData()
+{
+  // No body prox sensor on Whiskey
+  if(IsWhiskey())
+  {
+    return;
   }
-  if (HAL::PowerGetMode() == POWER_MODE_ACTIVE) {
-    proxData.distance_mm      = FlipBytes(bodyData_->proximity.rangeMM);
+
+  if (HAL::PowerGetMode() == POWER_MODE_CALM) {
+    proxData_.distance_mm      = PROX_CALM_MODE_DIST_MM;
+    proxData_.signalIntensity  = 0.f;
+    proxData_.ambientIntensity = 0.f;
+    proxData_.spadCount        = 200.f;
+    proxData_.timestamp_ms     = HAL::GetTimeStamp();
+    proxData_.rangeStatus      = RangeStatus::RANGE_VALID;
+  } else if (bodyData_->proximity.sampleCount != lastProxDataSampleCount_) {
+    proxData_.rangeStatus = ConvertToApiRangeStatus(bodyData_->proximity.rangeStatus);
+    // Track the occurrences of invalid prox sensor readings, reported on a periodic basis
+    switch(proxData_.rangeStatus) {
+      case RangeStatus::RANGE_VALID:
+        // Do nothing
+        break;
+      case RangeStatus::SIGMA_FAIL:
+      case RangeStatus::SIGNAL_FAIL:
+      case RangeStatus::MIN_RANGE_FAIL:
+      case RangeStatus::PHASE_FAIL:
+      case RangeStatus::HARDWARE_FAIL:
+        ++invalidProxSensorStatusCounts_[(int)proxData_.rangeStatus];
+        break;
+      case RangeStatus::NO_UPDATE:
+        ++noUpdateProxSensorStatusCount_;
+        break;
+      default:
+        AnkiWarn("HAL.ProcessProxData.UnhandledStatus", "%s", EnumToString(proxData_.rangeStatus));
+        break;
+    }
+
+    proxData_.distance_mm      = FlipBytes(bodyData_->proximity.rangeMM);
     // Signal/Ambient Rate are fixed point 9.7, so convert to float:
-    proxData.signalIntensity  = static_cast<float>(FlipBytes(bodyData_->proximity.signalRate)) / 128.f;
-    proxData.ambientIntensity = static_cast<float>(FlipBytes(bodyData_->proximity.ambientRate)) / 128.f;
+    proxData_.signalIntensity  = static_cast<float>(FlipBytes(bodyData_->proximity.signalRate)) / 128.f;
+    proxData_.ambientIntensity = static_cast<float>(FlipBytes(bodyData_->proximity.ambientRate)) / 128.f;
     // SPAD count is fixed point 8.8, so convert to float:
-    proxData.spadCount        = static_cast<float>(FlipBytes(bodyData_->proximity.spadCount)) / 256.f;
-    proxData.timestamp_ms     = HAL::GetTimeStamp();
-  } else {
-    // Calm mode values
-    proxData.distance_mm      = PROX_CALM_MODE_DIST_MM;
-    proxData.signalIntensity  = 0.f;
-    proxData.ambientIntensity = 0.f;
-    proxData.spadCount        = 200.f;
-    proxData.timestamp_ms     = HAL::GetTimeStamp();
+    proxData_.spadCount        = static_cast<float>(FlipBytes(bodyData_->proximity.spadCount)) / 256.f;
+    proxData_.timestamp_ms     = HAL::GetTimeStamp();
+
+    lastProxDataSampleCount_ = bodyData_->proximity.sampleCount;
   }
-  return proxData;
 }
 
 u16 HAL::GetButtonState(const ButtonID button_id)
@@ -914,6 +1001,11 @@ bool HAL::BatteryIsOverheated()
   return bodyData_->battery.flags & POWER_IS_OVERHEATED;
 }
 
+bool HAL::BatteryIsLow()
+{
+  return bodyData_->battery.flags & POWER_IS_TOO_LOW;
+}
+
 f32 HAL::ChargerGetVoltage()
 {
   // scale raw ADC counts to voltage (conversion factor from Vandiver)
@@ -927,6 +1019,11 @@ u8 HAL::BatteryGetTemperature_C()
     return 0;
   }
   return static_cast<u8>(bodyData_->battery.temperature);
+}
+
+bool HAL::IsShutdownImminent()
+{
+  return (bodyData_->battery.flags & POWER_BATTERY_SHUTDOWN);
 }
 
 u8 HAL::GetWatchdogResetCounter()
@@ -954,13 +1051,13 @@ void PrintBodyDataUpdate()
         const MotorState& lift = bodyData_->motor[MOTOR_LIFT];
         const MotorState& left = bodyData_->motor[MOTOR_LEFT];
         const MotorState& right = bodyData_->motor[MOTOR_RIGHT];
-        AnkiInfo("HAL.BodyData.Motors", 
+        AnkiInfo("HAL.BodyData.Motors",
                  "Status 0x%02x, "
                  "H: (pos %d, dlt %d, tm %u), "
                  "L: (pos %d, dlt %d, tm %u), "
                  "WL: (pos %d, dlt %d, tm %u), "
                  "WR: (pos %d, dlt %d, tm %u)",
-                 bodyData_->flags, 
+                 bodyData_->flags,
                  head.position, head.delta, head.time,
                  lift.position, lift.delta, lift.time,
                  left.position, left.delta, left.time,
@@ -973,13 +1070,13 @@ void PrintBodyDataUpdate()
                  "Status 0x%02x, "
                  "Cliff: %4u %4u %4u %4u, "
                  "Prox: range %u, sig %u, amb %u, spadCnt %u, sampCnt %u, calibRes %u",
-                 bodyData_->flags, 
+                 bodyData_->flags,
                  cliff[0], cliff[1], cliff[2], cliff[3],
                  prox.rangeMM, prox.signalRate, prox.ambientRate, prox.spadCount, prox.sampleCount, prox.calibrationResult);
       }
       if (_bodyDataPrintBattery) {
-        const BatteryState& batt = bodyData_->battery;               
-        AnkiInfo("HAL.BodyData.Battery", 
+        const BatteryState& batt = bodyData_->battery;
+        AnkiInfo("HAL.BodyData.Battery",
                  "Status 0x%02x, battV %d, chgr %d, temp %d, battFlags 0x%4x",
                  bodyData_->flags, batt.main_voltage, batt.charger, batt.temperature, batt.flags);
       }

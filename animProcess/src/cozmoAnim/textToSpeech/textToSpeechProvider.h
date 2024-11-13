@@ -20,7 +20,9 @@
 // Forward declarations
 namespace Anki {
   namespace Vector {
-    class AnimContext;
+    namespace Anim {
+      class AnimContext;
+    }
     namespace TextToSpeech {
       class TextToSpeechProviderImpl;
     }
@@ -88,7 +90,7 @@ private:
 class TextToSpeechProvider
 {
 public:
-  TextToSpeechProvider(const AnimContext* ctx, const Json::Value& tts_config);
+  TextToSpeechProvider(const Anim::AnimContext* ctx, const Json::Value& tts_config);
   ~TextToSpeechProvider();
 
   Result SetLocale(const std::string & locale);
@@ -96,7 +98,11 @@ public:
   // Initialize TTS utterance and get first chunk of TTS audio.
   // Returns RESULT_OK on success, else error code.
   // Sets done to true when audio generation is complete.
-  Result GetFirstAudioData(const std::string & text, float durationScalar, TextToSpeechProviderData & data, bool & done);
+  Result GetFirstAudioData(const std::string & text,
+                           float durationScalar,
+                           float pitchScalar,
+                           TextToSpeechProviderData & data,
+                           bool & done);
 
   // Get next chunk of TTS audio.
   // Returns RESULT_OK on success, else error code.

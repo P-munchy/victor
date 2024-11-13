@@ -15,7 +15,6 @@
 #include "audioEngine/multiplexer/audioCladMessageHelper.h"
 #include "clad/audio/audioEventTypes.h"
 #include "clad/robotInterface/messageEngineToRobot.h"
-#include "clad/types/behaviorComponent/userIntent.h"
 #include "coretech/common/engine/utils/timer.h"
 #include "engine/aiComponent/behaviorComponent/behaviorComponent.h"
 #include "engine/aiComponent/behaviorComponent/userIntentComponent.h"
@@ -100,13 +99,9 @@ void AlexaComponent::InitDependent(Robot *robot, const AICompMap& dependentComps
     SetRequest( Request::SignOutApp );
   };
   _consoleFuncs.emplace_front( "ForceAlexaOptOut", std::move(forceOptOut), "Alexa", "" );
-  auto fakeAppDisconnect = [this](ConsoleFunctionContextRef context) {
-    SendCancelPendingAuth(RobotInterface::CancelAlexaFromEngineReason::AppDisconnect);
-  };
-  _consoleFuncs.emplace_front( "FakeAppDisconnect", std::move(fakeAppDisconnect), "Alexa", "" );
   
-  
-  
+
+#if !(ANKI_DISABLE_ALEXA)
   // check Alexa feature flag
   const auto* ctx = robot->GetContext();
   if( ctx != nullptr ) {
@@ -117,6 +112,9 @@ void AlexaComponent::InitDependent(Robot *robot, const AICompMap& dependentComps
     // authenticated. However, messaging to anim might not be init'd yet. Instead, SendAuthStateToApp will
     // check the feature flag and disable alexa if it some how ends up initialized without the feature flag.
   }
+#else
+  _featureFlagEnabled = false;
+#endif //ANKI_DISABLE_ALEXA
   
   // setup anim tags for getins to various ux states
   auto& animComponent = robot->GetAnimationComponent();
@@ -133,7 +131,7 @@ void AlexaComponent::InitDependent(Robot *robot, const AICompMap& dependentComps
   const float currTime_s = BaseStationTimer::getInstance()->GetCurrentTimeInSeconds();
   _lastUxStateTransition_s = currTime_s;
 }
-
+  
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void AlexaComponent::AdditionalUpdateAccessibleComponents(AICompIDSet& components) const
 {
@@ -268,12 +266,6 @@ void AlexaComponent::HandleAppEvents( const AnkiEvent<external_interface::Gatewa
       }
     }
       break;
-    case external_interface::GatewayWrapperTag::kAppDisconnected:
-    {
-      // tell anim process to cancel any pending auth, but remain authenticated if already authenticated
-      SendCancelPendingAuth(RobotInterface::CancelAlexaFromEngineReason::AppDisconnect);
-    }
-      break;
     default:
       break;
   }
@@ -377,13 +369,6 @@ void AlexaComponent::SendAuthStateToApp( bool isResponse )
     }
     
   }
-}
-  
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-void AlexaComponent::SendCancelPendingAuth(const RobotInterface::CancelAlexaFromEngineReason& reason) const
-{
-  // send anim message to cancel pending authorization
-  _robot.SendMessage( RobotInterface::EngineToRobot( RobotInterface::CancelPendingAlexaAuth{ reason } ) );
 }
   
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

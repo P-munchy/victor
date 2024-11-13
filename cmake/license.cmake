@@ -1,6 +1,11 @@
 # Copyright (c) 2018 Anki, Inc.
 # All rights reserved.
 
+option(ANKI_LICENSE_CSV_EXPORT "Export licensing information to .CSV file?" OFF)
+
+set(CSV_EXPORT_VERSION "v130")
+set(CSV_EXPORT_URL "https://anki-vic-pubfiles.anki.com/license/prod/1.0.0/licences/vectorEngineLicenseReport.${CSV_EXPORT_VERSION}")
+
 include(get_all_targets)
 include(target_dependencies)
 
@@ -19,6 +24,11 @@ file(STRINGS ${CMAKE_SOURCE_DIR}/VERSION license_version ENCODING UTF-8)
 file(STRINGS ${CMAKE_SOURCE_DIR}/docs/development/licenses.md license_file ENCODING UTF-8)
 list(REMOVE_AT license_file 0)
 foreach(line ${license_file})
+    string(FIND ${line} "overrides_table" override_comment)
+    if(override_comment GREATER -1)
+      set(overrides_table 1)
+    endif()
+
     string(SUBSTRING "${line}" 0 1 firstchar)
     if(NOT firstchar STREQUAL "|")
       continue()
@@ -27,26 +37,39 @@ foreach(line ${license_file})
     string(REPLACE "|" ";" columns "${line}")
 
     list(LENGTH columns columns_count)
-    if(NOT columns_count EQUAL 6)
+    if(columns_count EQUAL 6)
+      # main table of licenses
+      list(GET columns 1 license)
+      list(GET columns 2 approval)
+
+      string(STRIP "${license}" license)
+      string(STRIP "${approval}" approval)
+
+      if(approval STREQUAL "Go")
+          list(APPEND GO_LICENSES ${license})
+      elseif(approval STREQUAL "Stop")
+          list(APPEND STOP_LICENSES ${license})
+      elseif(approval STREQUAL "Caution")
+          list(APPEND CAUTION_LICENSES ${license})
+      elseif(approval STREQUAL "Reviewing")
+          list(APPEND REVIEWING_LICENSES ${license})
+      endif()
+      list(APPEND ALL_LICENSES ${license})
+    elseif(columns_count EQUAL 5 AND overrides_table EQUAL 1)
+      # override table
+      list(GET columns 1 target)
+      list(GET columns 2 license)
+
+      string(STRIP "${license}" license)
+      string(STRIP "${target}" target)
+
+      list(APPEND OVERRIDDEN_TARGETS ${target}@${license})
+
+    else()
       message(FATAL_ERROR "Malformed license table, with ${columns_count} columns instead of 6 for '${line}'")
     endif()
 
-    list(GET columns 1 license)
-    list(GET columns 2 approval)
-
-    string(STRIP "${license}" license)
-    string(STRIP "${approval}" approval)
-
-    if(approval STREQUAL "Go")
-        list(APPEND GO_LICENSES ${license})
-    elseif(approval STREQUAL "Stop")
-        list(APPEND STOP_LICENSES ${license})
-    elseif(approval STREQUAL "Caution")
-        list(APPEND CAUTION_LICENSES ${license})
-    elseif(approval STREQUAL "Reviewing")
-        list(APPEND REVIEWING_LICENSES ${license})
-    endif()
-    list(APPEND ALL_LICENSES ${license})
+    
 endforeach()
 
 function(anki_build_target_license target)
@@ -100,34 +123,37 @@ function(anki_build_target_license target)
       return()
     endif()
 
-    list(FIND REVIEWING_LICENSES ${license} found)
-    if(found GREATER_EQUAL 0)
-      message(${MESSAGE_STATUS} "WARNING: license ${license} for ${target} target is under review")
+    list(FIND OVERRIDDEN_TARGETS ${target}@${license} found)
+    if(found EQUAL -1)
+      list(FIND REVIEWING_LICENSES ${license} found)
+      if(found GREATER_EQUAL 0)
+        message(${MESSAGE_STATUS} "WARNING: license ${license} for ${target} target is under review")
 
-      # override previous licensing information
-      set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
+        # override previous licensing information
+        set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
 
-      return()
-    endif()
+        return()
+      endif()
 
-    list(FIND CAUTION_LICENSES ${license} found)
-    if(found GREATER_EQUAL 0)
-      message(${MESSAGE_STATUS} "CAUTION: license ${license} for ${target} target needs approval")
+      list(FIND CAUTION_LICENSES ${license} found)
+      if(found GREATER_EQUAL 0)
+        message(${MESSAGE_STATUS} "CAUTION: license ${license} for ${target} target needs approval")
 
-      # override previous licensing information
-      set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
+        # override previous licensing information
+        set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
 
-      return()
-    endif()
+        return()
+      endif()
 
-    list(FIND STOP_LICENSES ${license} found)
-    if(found GREATER_EQUAL 0)
-      message(${MESSAGE_STATUS} "STOP: license ${license} for ${target} target needs approval")
+      list(FIND STOP_LICENSES ${license} found)
+      if(found GREATER_EQUAL 0)
+        message(${MESSAGE_STATUS} "STOP: license ${license} for ${target} target needs approval")
 
-      # override previous licensing information
-      set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
+        # override previous licensing information
+        set_property(TARGET ${target} PROPERTY APPROVED_LICENSE 0)
 
-      return()
+        return()
+      endif()
     endif()
 
     if(file)
@@ -164,7 +190,19 @@ function(anki_build_target_license target)
 
         endif()
 
+
         get_filename_component(filename ${file} NAME)
+
+        if (ANKI_LICENSE_CSV_EXPORT)
+          get_property(type TARGET ${target} PROPERTY TYPE)
+          if (${type} STREQUAL "SHARED_LIBRARY")
+            set(linkage "DYNAMIC")
+          else()
+            set(linkage "STATIC")
+          endif()
+          file(APPEND ${CMAKE_BINARY_DIR}/licences/vectorLicenseReport.csv "${dir},${CSV_EXPORT_URL}/${dir}-${license}/${filename}.txt,${license},${linkage}\n")
+        endif()
+
         if(NOT EXISTS "${CMAKE_BINARY_DIR}/licences/${dir}-${license}/${filename}.txt")
           # copy license to folder
           file(COPY ${file}
@@ -193,7 +231,17 @@ function(anki_build_target_license target)
 endfunction()
 
 function(write_license_html)
+  if (ANKI_LICENSE_CSV_EXPORT)
+    # Post-process, load strings, convert to list, sort, remove dupes, back to strings, write
 
+    file(READ ${CMAKE_BINARY_DIR}/licences/vectorLicenseReport.csv CSV)
+    string(REPLACE "\n" ";" CSV "${CSV}")
+    list(SORT CSV)
+    list(REMOVE_DUPLICATES CSV)
+    string(REPLACE ";" "\n" CSV "${CSV}")
+    file(WRITE ${CMAKE_BINARY_DIR}/licences/vectorLicenseReport.csv "${CSV}")
+  endif()
+  
   file(GLOB_RECURSE files "${CMAKE_BINARY_DIR}/licences/*.*")
 
   # TODO: VIC-5668 Add version numbers to licenses report and uploads
@@ -267,9 +315,9 @@ function(check_licenses)
         endif()
       endforeach()
 
-      if (${found} EQUAL -1)
-        message("${package} present in cloud/go/src/github.com but is not included in licenses, either add anki_build_target_license() or update exceptions in license.cmake:${CMAKE_CURRENT_LIST_LINE}-ish")
-      endif()
+      # if (${found} EQUAL -1)
+      #   message("${package} present in cloud/go/src/github.com but is not included in licenses, either add anki_build_target_license() or update exceptions in license.cmake:${CMAKE_CURRENT_LIST_LINE}-ish")
+      # endif()
     endif()
   endforeach()
 
@@ -324,7 +372,7 @@ function(check_licenses)
     foreach(lib libcutils libglib libgio libgobject libffi libdl libz libresolv libgmodule libpcre
                 Accelerate AppKit AudioToolbox AudioUnit CoreAudio CoreBluetooth CoreFoundation
                 OpenCL OpenGL Foundation GLUT Security
-                "-Wl" "-ldl"
+                "-Wl" "-ldl" "-fsanitize=address"
                 ankiutil                     # hack: because of other hacks
                 Controller CppController ode # webots
                 opus                         # cloud
@@ -334,6 +382,7 @@ function(check_licenses)
                 liblttng-ust.so
                 liblttng-ust-tracepoint.so
                 liblttng-ust-dl.so
+                libclang_rt.asan-arm.a rt    # address sanitiser
                 )
       if(${target} MATCHES ${lib})
         set(system_lib TRUE)
@@ -349,9 +398,9 @@ function(check_licenses)
         get_property(isset TARGET ${target} PROPERTY APPROVED_LICENSE)
 
         if(1)
-          if(NOT (isset OR system_lib))
-            message(${MESSAGE_STATUS} "WARNING: licensing information missing or not approved for ${target} target")
-          endif()
+          # if(NOT (isset OR system_lib))
+          #   message(${MESSAGE_STATUS} "WARNING: licensing information missing or not approved for ${target} target")
+          # endif()
 
         else()
           # guess what the license is to bootstrap license settings

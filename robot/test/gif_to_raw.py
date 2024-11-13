@@ -5,8 +5,6 @@ import array
 from PIL import Image
 #import Image
 
-SCREEN_WIDTH,SCREEN_HEIGHT = 184,96 #240,240 #180,240
-SIZE = (SCREEN_WIDTH,SCREEN_HEIGHT)
 
 def pack16bitRGB(pixel):
 #    print(pixel)
@@ -27,6 +25,8 @@ def pack16bitRGB(pixel):
 
 
 def convert_to_raw(img):
+    print(SCREEN_WIDTH)
+    print(SCREEN_HEIGHT)
     bitmap = [0x0000]*(SCREEN_WIDTH*SCREEN_HEIGHT)
     for y in range(img.size[1]):
         for x in range(img.size[0]):
@@ -37,17 +37,18 @@ def convert_to_raw(img):
 
 RAW = 1
 
-def extractFrames(inGif):
+def convert_frame_to_data(frame):
+    newframe = frame.convert('RGBA')
+    newframe = convert_to_raw(newframe)
+    data = array.array("H",newframe)
+    return data
 
-
+def extractGifFrames(inGif):
     frame = Image.open(inGif)
     nframes = 0
     with open('%s.raw' % (os.path.basename(inGif),), "wb+") as f:
         while frame:
-#            newframe = frame.rotate(90).resize( SIZE, Image.ANTIALIAS).convert('RGBA')
-            newframe = frame.convert('RGBA')
-            newframe = convert_to_raw(newframe)
-            data = array.array("H",newframe)
+            data = convert_frame_to_data(frame)
             f.write(data.tostring())
             nframes += 1
             try:
@@ -56,5 +57,24 @@ def extractFrames(inGif):
                 break;
     return True
 
+def convertImages(dirname, images):
+    outfilename = '%s/anim.raw' % dirname
+    with open(outfilename, "wb+") as f:
+        nframes = 0
+        for filename in images:
+            frame = Image.open(filename)
+            data = convert_frame_to_data(frame)
+            f.write(data.tostring())
+            nframes += 1
 
-extractFrames(sys.argv[1])
+        print('wrote {} frames to {}'.format(nframes, outfilename))
+            
+if len(sys.argv) != 4:
+    print('Usage: gif_to_raw.py image.gif WIDTH HEIGHT')
+    print('Legacy vector is 184x96 new is 160x80')
+    exit(-1)
+else:
+    SCREEN_WIDTH = int(sys.argv[2])
+    SCREEN_HEIGHT = int(sys.argv[3])
+
+    extractGifFrames(sys.argv[1])

@@ -33,6 +33,7 @@ protected:
   explicit BehaviorCoordinateWhileInAir(const Json::Value& config);
   virtual void InitPassThrough() override;
   virtual void OnPassThroughActivated() override;
+  virtual void OnFirstPassThroughUpdate() override;
   virtual void PassThroughUpdate() override;
   virtual void OnPassThroughDeactivated() override;
   
@@ -47,17 +48,18 @@ private:
   ICozmoBehaviorPtr _initialPickupReaction;
   ICozmoBehaviorPtr _onBackReaction;
   ICozmoBehaviorPtr _onFaceReaction;
+  ICozmoBehaviorPtr _heldInPalmDispatcher;
 
   std::unique_ptr<AreBehaviorsActivatedHelper> _inAirDispatcherBehaviorSet;
   std::unique_ptr<AreBehaviorsActivatedHelper> _suppressInAirBehaviorSet;
-  std::unique_ptr<AreBehaviorsActivatedHelper> _lockTracksBehaviorSet;
+  std::unique_ptr<AreBehaviorsActivatedHelper> _dontLockTracksBehaviorSet;
 
   bool IsInAirDispatcherActive() const;
 
   void LockTracksIfAppropriate();
   void SuppressInAirReactionIfAppropriate();
   void SuppressInitialPickupReactionIfAppropriate();
-
+  
 };
 
 } // namespace Vector

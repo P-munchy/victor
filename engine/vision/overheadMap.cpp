@@ -15,7 +15,7 @@
 
 #include "anki/cozmo/shared/cozmoConfig.h"
 #include "coretech/common/engine/jsonTools.h"
-#include "coretech/common/engine/math/quad_impl.h" // include this to avoid linking error in android
+#include "coretech/common/engine/math/quad.h" // include this to avoid linking error in android
 #include "coretech/common/engine/utils/data/dataPlatform.h"
 #include "engine/cozmoContext.h"
 #include "engine/robot.h"
@@ -109,7 +109,7 @@ OverheadMap::OverheadMap(const Json::Value& config, const CozmoContext *context)
 
 
 Result OverheadMap::Update(const Vision::ImageRGB& image, const VisionPoseData& poseData,
-                           DebugImageList<Vision::CompressedImage>& debugImages)
+                           Vision::DebugImageList<Vision::CompressedImage>& debugImages)
 {
 
   // TODO skip if robot hasn't moved
@@ -211,7 +211,7 @@ Result OverheadMap::Update(const Vision::ImageRGB& image, const VisionPoseData& 
 }
 
 Vision::ImageRGB OverheadMap::GetImageCenteredOnRobot(const Pose3d& robotPose,
-                                                      DebugImageList<Vision::CompressedImage>& debugImages) const
+                                                      Vision::DebugImageList<Vision::CompressedImage>& debugImages) const
 {
 
   // To extract the pixels underneath the robot, the (cropped) overhead map is rotated by the
@@ -458,7 +458,7 @@ void OverheadMap::SaveMaskedOverheadPixels(const std::string& positiveExamplesFi
 
 }
 
-void OverheadMap::UpdateFootprintMask(const Pose3d& robotPose, DebugImageList<Vision::CompressedImage>& debugImages)
+void OverheadMap::UpdateFootprintMask(const Pose3d& robotPose, Vision::DebugImageList<Vision::CompressedImage>& debugImages)
 {
   cv::RotatedRect footprintRect = GetFootprintRotatedRect(robotPose);
   if ((footprintRect.size.width == 0) || (footprintRect.size.height == 0)) {

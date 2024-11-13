@@ -19,7 +19,7 @@
 #include "clad/externalInterface/messageGameToEngine.h"
 #include "clad/types/enrolledFaceStorage.h"
 #include "coretech/common/engine/math/poseOriginList.h"
-#include "coretech/common/shared/radians.h"
+#include "coretech/common/shared/math/radians.h"
 
 #include "engine/actions/animActions.h"
 #include "engine/actions/basicActions.h"
@@ -1077,6 +1077,20 @@ namespace Vector {
   {
     Enroll(faceID.GetID(), forceNewID);
   }
+
+#if ANKI_DEV_CHEATS
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  void FaceWorld::SaveAllRecognitionImages(const std::string& imagePathPrefix)
+  {
+    _robot->GetVisionComponent().SaveAllRecognitionImages(imagePathPrefix);
+  }
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  void FaceWorld::DeleteAllRecognitionImages()
+  {
+    _robot->GetVisionComponent().DeleteAllRecognitionImages();
+  }
+#endif
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   void FaceWorld::SendObjectUpdateToWebViz( const ExternalInterface::RobotDeletedFace& msg ) const

@@ -30,24 +30,23 @@ import (
 // Enables logs about the requests coming and going from the gateway.
 // Most useful for debugging the json output being sent to the app.
 const (
-	logVerbose          = false
-	logMessageContent   = false
-	hostProtocolVersion = 2
-	minProtocolVersion  = 0
+	logVerbose        = false
+	logMessageContent = false
 )
 
 var (
-	robotHostname      string
-	signalHandler      chan os.Signal
-	demoKeyPair        *tls.Certificate
-	demoCertPool       *x509.CertPool
-	cloudCheckLimiter  *MultiLimiter
-	debugLogLimiter    *MultiLimiter
-	userAuthLimiter    *MultiLimiter
-	switchboardManager SwitchboardIpcManager
-	engineProtoManager EngineProtoIpcManager
-	tokenManager       ClientTokenManager
-	bleProxy           BLEProxy
+	robotHostname          string
+	signalHandler          chan os.Signal
+	demoKeyPair            *tls.Certificate
+	demoCertPool           *x509.CertPool
+	cloudCheckLimiter      *MultiLimiter
+	debugLogLimiter        *MultiLimiter
+	userAuthLimiter        *MultiLimiter
+	switchboardManager     SwitchboardIpcManager
+	engineProtoManager     EngineProtoIpcManager
+	tokenManager           ClientTokenManager
+	bleProxy               BLEProxy
+	numCommandsSentFromSDK uint32
 
 	// TODO: remove clad socket and map when there are no more clad messages being used
 	engineCladManager EngineCladIpcManager
@@ -62,6 +61,7 @@ func LoggingUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Un
 	}()
 	nameList := strings.Split(info.FullMethod, "/")
 	name := nameList[len(nameList)-1]
+	numCommandsSentFromSDK++
 	if logMessageContent {
 		log.Printf("Received rpc request %s(%#v)\n", name, req)
 	} else {
@@ -85,6 +85,7 @@ func LoggingStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.
 	}()
 	nameList := strings.Split(info.FullMethod, "/")
 	name := nameList[len(nameList)-1]
+	numCommandsSentFromSDK++
 	if logMessageContent {
 		log.Printf("Received stream request %s(%#v)\n", name, srv)
 	} else {

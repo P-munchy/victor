@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.6)
 
+include(anki_build_cxx)
+
 project(cameraService)
 
 if (VICOS)
@@ -9,8 +11,6 @@ add_library(camera_client STATIC
     vicos/camera_client/camera_client.c
     vicos/camera_client/log.h
     vicos/camera_client/log.c
-    vicos/camera_client/gpio.h
-    vicos/camera_client/gpio.c
 )
 
 target_include_directories(camera_client
@@ -20,14 +20,22 @@ target_include_directories(camera_client
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vicos/camera_client/inc>
 )
 
+target_link_libraries(camera_client
+  PRIVATE
+  gpio
+)
+
 target_compile_definitions(camera_client
   PRIVATE
+  ${ANKI_BUILD_CXX_COMPILE_DEFINITIONS}
   USE_ION
   USE_ANDROID_LOGGING=1
+
 )
 
 target_compile_options(camera_client
-PRIVATE
+  PRIVATE
+  ${ANKI_BUILD_CXX_COMPILE_OPTIONS}
   -std=c11 # needed for stdatomic.h
 )
 
@@ -36,7 +44,7 @@ anki_build_target_license(camera_client "ANKI")
 
 endif()
 
-include(anki_build_cxx)
+
 
 anki_build_cxx_library(cameraService ${ANKI_SRCLIST_DIR})
 anki_build_target_license(cameraService "ANKI")
@@ -66,6 +74,7 @@ PRIVATE
   engine_clad # imageTypes.h
   robot_interface # cozmoConfig.h
   ${PLATFORM_LIBS}
+  ${ASAN_LINKER_FLAGS}
 )
 
 anki_build_strip(TARGET cameraService)

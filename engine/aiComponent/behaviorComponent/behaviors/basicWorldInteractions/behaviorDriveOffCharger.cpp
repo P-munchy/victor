@@ -21,6 +21,7 @@
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/behaviorExternalInterface.h"
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/charger.h" // for charger length
 #include "engine/components/mics/micComponent.h"
 #include "engine/components/mics/micDirectionHistory.h"
@@ -334,7 +335,7 @@ void BehaviorDriveOffCharger::TransitionToDrivingFace()
 void BehaviorDriveOffCharger::TransitionToDrivingCube()
 {
   BlockWorldFilter filter;
-  filter.SetAllowedFamilies( {ObjectFamily::LightCube} );
+  filter.AddFilterFcn(&BlockWorldFilter::IsLightCubeFilter);
   
   const ObservableObject* obj = GetBEI().GetBlockWorld().FindMostRecentlyObservedObject( filter );
   if( obj != nullptr ) {

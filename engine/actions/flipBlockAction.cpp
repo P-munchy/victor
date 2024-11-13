@@ -282,7 +282,7 @@ void FlipBlockAction::SetShouldCheckPreActionPose(bool shouldCheck)
 
 void FlipBlockAction::GetRequiredVisionModes(std::set<VisionModeRequest>& requests) const
 {
-  requests.insert({ VisionMode::DetectingMarkers, EVisionUpdateFrequency::Low });
+  requests.insert({ VisionMode::Markers, EVisionUpdateFrequency::Low });
 }
 
 ActionResult FlipBlockAction::Init()
@@ -338,15 +338,15 @@ ActionResult FlipBlockAction::CheckIfDone()
   const ActionResult result = _compoundAction.Update();
   
   // grab object now because we use regardless of result
-  ObservableObject* bottomBlock = GetRobot().GetBlockWorld().GetLocatedObjectByID(_objectID);
+  auto* block = GetRobot().GetBlockWorld().GetLocatedObjectByID(_objectID);
   
   if(result != ActionResult::RUNNING)
   {
-    // Purposely forget where the bottom block is, and any currently on top
-    if ( nullptr != bottomBlock )
+    // After flipping the block, it will definitely be in a new pose, but it will be _pretty close_ to its previous
+    // pose. Therefore, mark the pose as dirty, but do not remove the object entirely.
+    if ( nullptr != block )
     {
-      const bool propagateStack = true;
-      GetRobot().GetObjectPoseConfirmer().MarkObjectUnknown(bottomBlock, propagateStack);
+      GetRobot().GetBlockWorld().MarkObjectDirty(block);
     }
     else
     {
@@ -355,14 +355,14 @@ ActionResult FlipBlockAction::CheckIfDone()
     return result;
   }
   
-  if(nullptr == bottomBlock)
+  if(nullptr == block)
   {
     PRINT_NAMED_WARNING("FlipBlockAction.CheckIfDone.NullObject", "ObjectID=%d", _objectID.GetValue());
     return ActionResult::BAD_OBJECT;
   }
   
   Pose3d p;
-  bottomBlock->GetPose().GetWithRespectTo(GetRobot().GetPose(), p);
+  block->GetPose().GetWithRespectTo(GetRobot().GetPose(), p);
   if((p.GetTranslation().Length() < kDistToObjectToFlip_mm && _flipTag == -1))
   {
     IAction* action = new MoveLiftToHeightAction(MoveLiftToHeightAction::Preset::CARRY);

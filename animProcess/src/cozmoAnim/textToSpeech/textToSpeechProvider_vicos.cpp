@@ -41,7 +41,7 @@ namespace Anki {
 namespace Vector {
 namespace TextToSpeech {
 
-TextToSpeechProviderImpl::TextToSpeechProviderImpl(const AnimContext* context, const Json::Value& tts_platform_config)
+TextToSpeechProviderImpl::TextToSpeechProviderImpl(const Anim::AnimContext* context, const Json::Value& tts_platform_config)
 {
   // Caller must provide context & RNG
   DEV_ASSERT(context != nullptr, "TextToSpeechProviderImpl.InvalidContext");
@@ -281,12 +281,15 @@ Result TextToSpeechProviderImpl::SetLocale(const std::string & locale)
 
 Result TextToSpeechProviderImpl::GetFirstAudioData(const std::string & text,
                                                    float durationScalar,
+                                                   float pitchScalar,
                                                    TextToSpeechProviderData & data,
                                                    bool & done)
 {
-  LOG_INFO("TextToSpeechProvider.GetFirstAudioData", "text=%s duration=%f",
+  LOG_INFO("TextToSpeechProvider.GetFirstAudioData", "text=%s duration=%.2f pitch=%.2f",
             Anki::Util::HidePersonallyIdentifiableInfo(text.c_str()),
-            durationScalar);
+            durationScalar,
+            pitchScalar);
+
   if (nullptr == _BAB_Obj) {
     LOG_ERROR("TextToSpeechProvider.GetFirstAudioData", "TTS SDK not initialized");
     return RESULT_FAIL_INVALID_OBJECT;
@@ -296,8 +299,14 @@ Result TextToSpeechProviderImpl::GetFirstAudioData(const std::string & text,
   const auto baseSpeed = _tts_config->GetSpeed(_rng, text.size());
   const auto adjustedSpeed = AcapelaTTS::GetSpeechRate(baseSpeed, durationScalar);
   const auto speed = Anki::Util::numeric_cast<int>(std::round(adjustedSpeed));
+
+  // Get base pitch for this utterance, then adjust by pitch scalar
+  const auto basePitch = _tts_config->GetPitch();
+  const auto adjustedPitch = AcapelaTTS::GetAdjustedPitch(basePitch, pitchScalar);
+  const auto pitch = Anki::Util::numeric_cast<int>(std::round(adjustedPitch));
+
+  // Get shaping
   const auto shaping = _tts_config->GetShaping();
-  const auto pitch = _tts_config->GetPitch();
 
   // Adjust silence parameters to match configuration
   const auto leadingSilence_ms = _tts_config->GetLeadingSilence_ms();

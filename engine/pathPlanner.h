@@ -15,7 +15,6 @@
 #include "coretech/common/engine/objectIDs.h"
 #include "coretech/planning/shared/path.h"
 #include "coretech/planning/shared/goalDefs.h"
-#include "clad/types/objectFamilies.h"
 #include "clad/types/objectTypes.h"
 #include "clad/types/pathMotionProfile.h"
 #include <set>
@@ -106,34 +105,21 @@ public:
   // recent ComputePlan call. If the robot has moved significantly between computing the path and getting the
   // complete path, the path may trim the first few actions removed to account for the robots motion, based on
   // the passed in position
-  bool GetCompletePath(const Pose3d& currentRobotPose,
-                       Planning::Path &path,
-                       const PathMotionProfile* motionProfile = nullptr);
-  bool GetCompletePath(const Pose3d& currentRobotPose,
-                       Planning::Path &path,
-                       Planning::GoalID& selectedTargetIndex,
-                       const PathMotionProfile* motionProfile = nullptr);
+  bool HasCompletePath() const { return _hasValidPath; }
+  const Planning::Path& GetCompletePath() const { return _path; }
+  const Planning::GoalID& GetPathSelectedTargetIndex() const { return _selectedTargetIdx; }
 
   // return a test path
   virtual void GetTestPath(const Pose3d& startPose, Planning::Path &path, const PathMotionProfile* motionProfile = nullptr) {}
-      
-  void AddIgnoreFamily(const ObjectFamily objFamily)    { _ignoreFamilies.insert(objFamily); }
-  void RemoveIgnoreFamily(const ObjectFamily objFamily) { _ignoreFamilies.erase(objFamily); }
-  void ClearIgnoreFamilies()                                          { _ignoreFamilies.clear(); }
-      
-  void AddIgnoreType(const ObjectType objType)    { _ignoreTypes.insert(objType); }
-  void RemoveIgnoreType(const ObjectType objType) { _ignoreTypes.erase(objType); }
-  void ClearIgnoreTypes()                           { _ignoreTypes.clear(); }
-      
-  void AddIgnoreID(const ObjectID objID)          { _ignoreIDs.insert(objID); }
-  void RemoveIgnoreID(const ObjectID objID)       { _ignoreIDs.erase(objID); }
-  void ClearIgnoreIDs()                             { _ignoreIDs.clear(); }
+
+  // Modifies in path according to `motionProfile` to produce output path.
+  // Takes deceleration into account in order to produce a path with smooth deceleration
+  // over multiple path segments
+  // TODO: This is where Cozmo mood/skill-based path wonkification would occur,
+  //       but currently it just changes speeds and accel on each segment.
+  static Planning::Path ApplyMotionProfile(const Planning::Path &in, const PathMotionProfile& motionProfile);
   
 protected:
-      
-  std::set<ObjectFamily>             _ignoreFamilies;
-  std::set<ObjectType>               _ignoreTypes;
-  std::set<ObjectID>                 _ignoreIDs;
 
   bool _hasValidPath;
   bool _planningError;
@@ -147,21 +133,6 @@ protected:
   virtual EComputePathStatus ComputePath(const Pose3d& startPose,
                                          const Pose3d& targetPose) = 0;
 
-  
-  virtual bool GetCompletePath_Internal(const Pose3d& currentRobotPose,
-                                        Planning::Path &path);
-  virtual bool GetCompletePath_Internal(const Pose3d& currentRobotPose,
-                                        Planning::Path &path,
-                                        Planning::GoalID& selectedTargetIndex);
-  
-  // Modifies in path according to _pathMotionProfile to produce out path.
-  // Takes deceleration into account in order to produce a path with smooth deceleration
-  // over multiple path segments
-  // TODO: This is where Cozmo mood/skill-based path wonkification would occur,
-  //       but currently it just changes speeds and accel on each segment.
-  static bool ApplyMotionProfile(const Planning::Path &in,
-                                 const PathMotionProfile& motionProfile,
-                                 Planning::Path &out);
 private:
 
   std::string _name;

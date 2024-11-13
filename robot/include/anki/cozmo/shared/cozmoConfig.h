@@ -10,6 +10,7 @@
 #endif
 
 #include <math.h>
+#include "anki/cozmo/shared/factory/emrHelper.h"
 
 namespace Anki {
 namespace Vector {
@@ -128,8 +129,8 @@ namespace Vector {
   const f32 SCREEN_SIZE[2] = {26.f, 13.f};
   
   // Face display resolution, in pixels
-  const s32 FACE_DISPLAY_WIDTH = 184;
-  const s32 FACE_DISPLAY_HEIGHT = 96;
+  const s32 FACE_DISPLAY_WIDTH = IsXray() ? 160: 184;
+  const s32 FACE_DISPLAY_HEIGHT = IsXray() ? 80: 96;
   const s32 FACE_DISPLAY_NUM_PIXELS = FACE_DISPLAY_WIDTH * FACE_DISPLAY_HEIGHT;
 
   // Common conversion functionality for lift height
@@ -171,11 +172,11 @@ namespace Vector {
   
   const u8 NUM_RADIAL_DISTORTION_COEFFS = 8;
 
-  const u16 DEFAULT_CAMERA_RESOLUTION_WIDTH  = 640;
-  const u16 DEFAULT_CAMERA_RESOLUTION_HEIGHT = 360;
+  const u16 DEFAULT_CAMERA_RESOLUTION_WIDTH  =  IsXray() ? 800 : 640;
+  const u16 DEFAULT_CAMERA_RESOLUTION_HEIGHT =  IsXray() ? 600 : 360;
 
-  const u16 CAMERA_SENSOR_RESOLUTION_WIDTH  = 1280;
-  const u16 CAMERA_SENSOR_RESOLUTION_HEIGHT = 720;
+  const u16 CAMERA_SENSOR_RESOLUTION_WIDTH  = IsXray() ? 1600: 1280;
+  const u16 CAMERA_SENSOR_RESOLUTION_HEIGHT = IsXray() ?1200: 720;
   
   const f32 MIN_CAMERA_EXPOSURE_TIME_MS = 1;
   const f32 MAX_CAMERA_EXPOSURE_TIME_MS = 66;
@@ -235,6 +236,49 @@ namespace Vector {
 
   /***************************************************************************
    *
+   *                          Range Sensor (whiskey)
+   *
+   **************************************************************************/
+
+  #define TOF_SIDE_BY_SIDE 0 // Angled inwards
+  #define TOF_ABOVE_BELOW 1
+  #define TOF_CENTER_OF_FACE 2
+  
+  #define TOF_CONFIGURATION TOF_SIDE_BY_SIDE
+  
+  const f32 TOF_FOV_RAD = DEG_TO_RAD(19);
+  const u32 TOF_RESOLUTION = 4;
+
+  #if TOF_CONFIGURATION == TOF_SIDE_BY_SIDE
+  
+  const f32 TOF_LEFT_TRANS_REL_CAMERA_MM[] = {0, -8, 0};
+  const f32 TOF_LEFT_ROT_Z_REL_CAMERA_RAD = DEG_TO_RAD(12);
+  const f32 TOF_RIGHT_TRANS_REL_CAMERA_MM[] = {0, 8, 0};
+  const f32 TOF_RIGHT_ROT_Z_REL_CAMERA_RAD = DEG_TO_RAD(-12);
+  const f32 TOF_ANGLE_DOWN_REL_CAMERA_RAD = DEG_TO_RAD(7);
+  
+  #elif TOF_CONFIGURATION == TOF_ABOVE_BELOW
+
+  const f32 TOF_LEFT_TRANS_REL_CAMERA_MM[] = {0, -5, 0};
+  const f32 TOF_LEFT_ROT_Y_REL_CAMERA_RAD = DEG_TO_RAD(-9.5);
+  const f32 TOF_RIGHT_TRANS_REL_CAMERA_MM[] = {0, 5, 0};
+  const f32 TOF_RIGHT_ROT_Y_REL_CAMERA_RAD = DEG_TO_RAD(9.5);
+  const f32 TOF_ANGLE_DOWN_REL_CAMERA_RAD = DEG_TO_RAD(-4);
+
+  #elif TOF_CONFIGURATION == TOF_CENTER_OF_FACE
+
+  const f32 TOF_LEFT_TRANS_REL_CAMERA_MM[] = {0, 0, 10};
+  const f32 TOF_LEFT_ROT_Y_REL_CAMERA_RAD = DEG_TO_RAD(0);
+  const f32 TOF_RIGHT_TRANS_REL_CAMERA_MM[] = {0, 0, 10};
+  const f32 TOF_RIGHT_ROT_Y_REL_CAMERA_RAD = DEG_TO_RAD(0);
+  const f32 TOF_ANGLE_DOWN_REL_CAMERA_RAD = DEG_TO_RAD(-4);
+
+  #else
+  #error Invalid TOF_CONFIGURATION
+  #endif
+
+  /***************************************************************************
+   *
    *                          Speeds and Accels
    *
    **************************************************************************/
@@ -291,12 +335,6 @@ namespace Vector {
   const u32 ANIM_TIME_STEP_US = ANIM_TIME_STEP_MS * 1000;
   const s32 ANIM_OVERTIME_WARNING_THRESH_MS = 5;
   const s32 ANIM_OVERTIME_WARNING_THRESH_US = ANIM_OVERTIME_WARNING_THRESH_MS * 1000;
-  
-  // Web server process timing consts; much more lax
-  const u32 WEB_SERVER_TIME_STEP_MS = 100;
-  const u32 WEB_SERVER_TIME_STEP_US = WEB_SERVER_TIME_STEP_MS * 1000;
-  const s32 WEB_SERVER_OVERTIME_WARNING_THRESH_MS = 500;
-  const s32 WEB_SERVER_OVERTIME_WARNING_THRESH_US = WEB_SERVER_OVERTIME_WARNING_THRESH_MS * 1000;
   
   // Time step for cube tick
   const s32 CUBE_TIME_STEP_MS = 10;

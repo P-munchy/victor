@@ -26,10 +26,9 @@
 
 #include "cannedAnimLib/cannedAnims/animation.h"
 #include "cannedAnimLib/cannedAnims/cannedAnimationContainer.h"
-#include "coretech/common/engine/array2d_impl.h"
+#include "coretech/common/shared/array2d.h"
 #include "coretech/common/engine/utils/data/dataPlatform.h"
 #include "coretech/common/engine/utils/timer.h"
-#include "coretech/vision/shared/compositeImage/compositeImage.h"
 #include "coretech/vision/shared/rgb565Image/rgb565ImageBuilder.h"
 
 #include "json/json.h"
@@ -47,8 +46,10 @@ namespace {
 
   const u32 kMaxNumAvailableAnimsToReportPerTic = 1000;
 
-  static const u32 kNumImagePixels     = FACE_DISPLAY_HEIGHT * FACE_DISPLAY_WIDTH;
-  static const u32 kNumHalfImagePixels = kNumImagePixels / 2;
+  // static const u32 kNumImagePixels     = FACE_DISPLAY_HEIGHT * FACE_DISPLAY_WIDTH;
+  // static const u32 kNumHalfImagePixels = kNumImagePixels / 2;
+
+  static const int kMaxAnimGroupRecursionDepth = 100;
 }
   
 CONSOLE_VAR(f32, kEyeDartFocusValue_pix, "Animation", 1.0f);
@@ -81,24 +82,21 @@ void AnimationComponent::InitDependent(Vector::Robot* robot, const RobotCompMap&
   _movementComponent = dependentComps.GetComponentPtr<MovementComponent>();
   const CozmoContext* context = _robot->GetContext();
   _animationGroups = std::make_unique<AnimationGroupWrapper>(*(context->GetDataLoader()->GetAnimationGroups()));
-  if (context) {
-    // Setup game message handlers
-    IExternalInterface *extInterface = context->GetExternalInterface();
-    if (extInterface != nullptr) {
-      
-      auto helper = MakeAnkiEventUtil(*extInterface, *this, GetSignalHandles());
-  
-      using namespace ExternalInterface;
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::RequestAvailableAnimations>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::RequestAvailableAnimationGroups>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayProceduralFace>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::SetFaceHue>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayFaceImageBinaryChunk>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayFaceImageRGBChunk>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::SetKeepFaceAliveParameters>();
-      helper.SubscribeGameToEngine<MessageGameToEngineTag::ReadAnimationFile>();
 
-    }
+  // Setup game message handlers
+  IExternalInterface *extInterface = context->GetExternalInterface();
+  if (extInterface != nullptr) {
+    
+    auto helper = MakeAnkiEventUtil(*extInterface, *this, GetSignalHandles());
+
+    using namespace ExternalInterface;
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::RequestAvailableAnimations>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::RequestAvailableAnimationGroups>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayProceduralFace>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::SetFaceHue>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayFaceImageBinaryChunk>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::DisplayFaceImageRGBChunk>();
+    helper.SubscribeGameToEngine<MessageGameToEngineTag::ReadAnimationFile>();
   }
   
   // Setup robot message handlers
@@ -250,17 +248,47 @@ void AnimationComponent::DoleAvailableAnimations()
 }
 
 
-const std::string& AnimationComponent::GetAnimationNameFromGroup(const std::string& name, bool strictCooldown) const
+const std::string& AnimationComponent::GetAnimationNameFromGroup(const std::string& name,
+                                                                 bool strictCooldown,
+                                                                 int recursionCount) const
 {
+  static const std::string empty("");
+
+  if( !ANKI_VERIFY( recursionCount < kMaxAnimGroupRecursionDepth,
+                    "AnimationComponent.GetAnimationNameFromGroup.ExceededMaxREcursionDepth",
+                    "Recursion loop! Recursed %d times to group name '%s'",
+                    recursionCount,
+                    name.c_str()) ) {
+    // just give up after max recursion depth
+    return empty;
+  }
+
   const AnimationGroup* group = _animationGroups->_container.GetAnimationGroup(name);
   if(group != nullptr && !group->IsEmpty()) {
-    return group->GetAnimationName(_robot->GetMoodManager(),  _animationGroups->_container, 
-                                   _robot->GetComponent<FullRobotPose>().GetHeadAngle(), strictCooldown);
+    const std::string& selectedAnim = group->GetAnimationName(_robot->GetMoodManager(),
+                                                              _animationGroups->_container,
+                                                              _robot->GetComponent<FullRobotPose>().GetHeadAngle(),
+                                                              strictCooldown);
+    if( _animationGroups->_container.HasGroup( selectedAnim ) ) {
+      LOG_INFO("GetAnimationName.SubGroupSelected",
+               "Group %s returned sub-group %s, going deeper",
+               name.c_str(),
+               selectedAnim.c_str());
+      return GetAnimationNameFromGroup(selectedAnim, strictCooldown, recursionCount+1);
+    }
+    else {
+      return selectedAnim;
+    }
   }
-  static const std::string empty("");
   return empty;
 }
-  
+
+bool AnimationComponent::IsAnimationGroup(const std::string& group) const
+{
+  const bool groupExists = _animationGroups->_container.HasGroup(group);
+  return groupExists;
+}
+
 Result AnimationComponent::PlayAnimByName(const std::string& animName,
                                           int numLoops,
                                           bool interruptRunning,
@@ -305,63 +333,149 @@ Result AnimationComponent::PlayAnimByName(const std::string& animName,
   return RESULT_OK;
 }
 
-
-Result AnimationComponent::PlayCompositeAnimation(const std::string& animName,
-                                                  const Vision::CompositeImage& compositeImage, 
-                                                  u32 frameInterval_ms,
-                                                  int& outDuration_ms,
-                                                  bool interruptRunning,
-                                                  bool emptySpriteBoxesAreValid,
-                                                  AnimationCompleteCallback callback)
+Result AnimationComponent::PlayAnimWithSpriteBoxRemaps(const std::string& animName,
+                                                       const RemapMap& remaps,
+                                                       bool interruptRunning,
+                                                       AnimationCompleteCallback callback,
+                                                       const std::string& lockFaceAtEndOfAnimTag)
 {
   if (!_isInitialized) {
-    LOG_WARNING("AnimationComponent.PlayCompositeAnimation.Uninitialized", "");
+    LOG_WARNING("AnimationComponent.PlayAnimWithSpriteBoxRemaps.Uninitialized", "");
     return RESULT_FAIL;
   }
 
   // Check that animName is valid
   auto it = _availableAnims.find(animName);
   if (it == _availableAnims.end()) {
-    LOG_WARNING("AnimationComponent.PlayCompositeAnimation.AnimNotFound", "%s", animName.c_str());
-    return RESULT_FAIL;
-  }
-  
-  LOG_DEBUG("AnimationComponent.PlayCompositeAnimation.PlayingAnim", "%s", it->first.c_str());
-  
-  // TODO: Is this what interruptRunning should mean?
-  //       Or should it queue on anim process side and optionally interrupt currently executing anim?
-  if (IsPlayingAnimation() && !interruptRunning) {
-    LOG_INFO("AnimationComponent.PlayCompositeAnimation.WontInterruptCurrentAnim", "");
+    LOG_WARNING("AnimationComponent.PlayAnimWithSpriteBoxRemaps.AnimNotFound", "%s", animName.c_str());
     return RESULT_FAIL;
   }
 
-  const Animation* anim = nullptr;
-  bool gotAnim = false;
-  if(_dataAccessor != nullptr){
-    const auto* animContainer = _dataAccessor->GetCannedAnimationContainer();
-    if(animContainer != nullptr){
-      anim = animContainer->GetAnimation(animName);
-      gotAnim = (anim != nullptr);
-    }
-  }
-  
-  if(!gotAnim){
-    LOG_WARNING("AnimationComponent.PlayCompositeAnimation.AnimationNotFoundInContainer",
-                "Animations need to be manually loaded on engine side - %s is not", animName.c_str());
+  if (IsPlayingAnimation() && !interruptRunning) {
+    LOG_INFO("AnimationComponent.PlayAnimWithSpriteBoxRemaps.WontInterruptCurrentAnim", "");
     return RESULT_FAIL;
   }
 
   const Tag currTag = GetNextTag();
-  _robot->SendRobotMessage<RobotInterface::PlayCompositeAnimation>(_compositeImageID, currTag, animName);
+  const auto& spritePathMap = *_robot->GetContext()->GetDataLoader()->GetSpritePaths();
+
+  RobotInterface::PlayAnimWithSpriteBoxRemaps msg;
+  msg.tag = currTag;
+  msg.animName = animName;
+  msg.numRemaps = remaps.size();
+  msg.lockFaceAtEndOfAnim = !lockFaceAtEndOfAnimTag.empty();
+
+  if(remaps.size() > msg.spriteBoxRemaps.size()){
+    LOG_ERROR("AnimationComponent.PlayAnimWithSpriteBoxRemaps.MessageOverflow",
+              "Attempted to send %zu remaps, message can only carry %zu",
+              remaps.size(),
+              msg.spriteBoxRemaps.size());
+    return RESULT_FAIL;
+  }
+
+  int i = 0;
+  for(const auto& remap : remaps){
+    msg.spriteBoxRemaps[i].spriteBoxName = remap.first;
+    if(!ANKI_VERIFY(spritePathMap.IsValidAssetID(remap.second),
+                    "AnimationComponent.PlayAnimWithSpriteBoxRemaps.InvalidAsset", 
+                    "Attempted to remap SpriteBox %s with invalid assetID %d",
+                    Vision::SpriteBoxNameToString(remap.first),
+                    remap.second) ){
+      return RESULT_FAIL;
+    }
+    msg.spriteBoxRemaps[i].remappedAssetID = remap.second;
+    ++i;
+  }
+
   if(callback != nullptr){
     SetAnimationCallback(animName, callback, currTag, 0, 0, 0);
   }
 
-  outDuration_ms = anim->GetLastKeyFrameEndTime_ms();
-  return DisplayFaceImage(compositeImage, frameInterval_ms, outDuration_ms, interruptRunning, emptySpriteBoxesAreValid);
+  if(!lockFaceAtEndOfAnimTag.empty()){
+    auto lockTrackCallback = 
+      [this, lockFaceAtEndOfAnimTag](const AnimationComponent::AnimResult res, u32 streamTimeAnimEnded){
+        if(res == AnimResult::Completed){
+          _movementComponent->RecordTracksLocked((u8)AnimTrackFlag::FACE_TRACK, lockFaceAtEndOfAnimTag);
+        }
+      };
+    SetAnimationCallback(animName, lockTrackCallback, currTag, 0, 0, 0);
+  }
+
+  return _robot->SendRobotMessage<RobotInterface::PlayAnimWithSpriteBoxRemaps>(msg);
 }
 
-  
+
+Result AnimationComponent::PlayAnimWithSpriteBoxKeyFrames(const std::string& animName,
+                                                          const std::vector<Vision::SpriteBoxKeyFrame>& keyframes,
+                                                          bool interruptRunning,
+                                                          AnimationCompleteCallback callback)
+{
+  if (!_isInitialized) {
+    LOG_WARNING("AnimationComponent.PlayAnimWithSpriteBoxRemaps.Uninitialized", "");
+    return RESULT_FAIL;
+  }
+
+  // Empty animName will play a constructed animation containing ONLY the provided SpriteBoxKeyFrames
+  if(!animName.empty()){
+    // Check that animName is valid
+    auto it = _availableAnims.find(animName);
+    if (it == _availableAnims.end()) {
+      LOG_WARNING("AnimationComponent.PlayAnimWithSpriteBoxRemaps.AnimNotFound", "%s", animName.c_str());
+      return RESULT_FAIL;
+    }
+  }
+
+  if (IsPlayingAnimation() && !interruptRunning) {
+    LOG_INFO("AnimationComponent.PlayAnimWithSpriteBoxRemaps.WontInterruptCurrentAnim", "");
+    return RESULT_FAIL;
+  }
+
+  RobotInterface::PlayAnimWithSpriteBoxKeyFrames msg;
+  if(keyframes.size() > msg.spriteBoxKeyFrames.size()){
+    LOG_ERROR("AnimationComponent.PlayAnimWithSpriteBoxKeyFrames.MessageOverflow",
+              "Attempted to send %zu KeyFrames, message can only carry %zu",
+              keyframes.size(),
+              msg.spriteBoxKeyFrames.size());
+    return RESULT_FAIL;
+  }
+
+  const Tag currTag = GetNextTag();
+  msg.tag = currTag;
+  msg.numKeyFrames = keyframes.size();
+  std::memcpy(&msg.spriteBoxKeyFrames, keyframes.data(), keyframes.size() * sizeof(keyframes[0]));
+  msg.animName = animName;
+
+  if(callback != nullptr){
+    SetAnimationCallback(animName, callback, currTag, 0, 0, 0);
+  }
+
+  return _robot->SendRobotMessage<RobotInterface::PlayAnimWithSpriteBoxKeyFrames>(msg);
+}
+
+
+Result AnimationComponent::AddSpriteBoxKeyFramesToRunningAnim(const std::vector<Vision::SpriteBoxKeyFrame>& keyframes)
+{
+  if (!_isInitialized) {
+    LOG_WARNING("AnimationComponent.PlayAnimWithSpriteBoxRemaps.Uninitialized", "");
+    return RESULT_FAIL;
+  }
+
+  RobotInterface::AddSpriteBoxKeyFrames msg;
+  if(keyframes.size() > msg.spriteBoxKeyFrames.size()){
+    LOG_ERROR("AnimationComponent.AddSpriteBoxKeyFramesToRunningAnim.MessageOverflow",
+              "Attempted to send %zu KeyFrames, message can only carry %zu",
+              keyframes.size(),
+              msg.spriteBoxKeyFrames.size());
+    return RESULT_FAIL;
+  }
+
+  msg.numKeyFrames = keyframes.size();
+  std::memcpy(&msg.spriteBoxKeyFrames, keyframes.data(), keyframes.size() * sizeof(keyframes[0]));
+
+  return _robot->SendRobotMessage<RobotInterface::AddSpriteBoxKeyFrames>(msg);
+}
+
+
 AnimationComponent::Tag AnimationComponent::IsAnimPlaying(const std::string& animName)
 {
   for (auto it = _callbackMap.begin(); it != _callbackMap.end(); ++it) {
@@ -474,7 +588,7 @@ Result AnimationComponent::DisplayFaceImageBinary(const Vision::Image& img, u32 
 
     RobotInterface::DisplayFaceImageBinaryChunk msg;
     static const u32 kFaceArraySize = sizeof(msg.faceData);
-    static_assert(8 * kFaceArraySize == kNumHalfImagePixels, "AnimationComponent.DisplayFaceImageBinary.WrongFaceDataSize");
+    // static_assert(8 * kFaceArraySize == kNumHalfImagePixels, "AnimationComponent.DisplayFaceImageBinary.WrongFaceDataSize");
   
     msg.imageId = 0;
     msg.chunkIndex = halfIdx;
@@ -536,9 +650,9 @@ Result AnimationComponent::DisplayFaceImageHelper(const ImageType& img, u32 dura
     return RESULT_FAIL;
   }
   
-  ASSERT_NAMED(img.IsContinuous(), "AnimationComponent.DisplayFaceImage.NotContinuous");
-  ASSERT_NAMED(img.GetNumRows() == FACE_DISPLAY_HEIGHT, "AnimationComponent.DisplayFaceImage.IncorrectImageHeight");
-  ASSERT_NAMED(img.GetNumCols() == FACE_DISPLAY_WIDTH,  "AnimationComponent.DisplayFaceImage.IncorrectImageWidth");
+  // ASSERT_NAMED(img.IsContinuous(), "AnimationComponent.DisplayFaceImage.NotContinuous");
+  // ASSERT_NAMED(img.GetNumRows() == FACE_DISPLAY_HEIGHT, "AnimationComponent.DisplayFaceImage.IncorrectImageHeight");
+  // ASSERT_NAMED(img.GetNumCols() == FACE_DISPLAY_WIDTH,  "AnimationComponent.DisplayFaceImage.IncorrectImageWidth");
   
   MessageType msg;
   const int kMaxPixelsPerMsg = msg.faceData.size();
@@ -581,67 +695,6 @@ void AnimationComponent::SetAnimationCallback(const std::string& animName,
   _callbackMap.emplace(std::piecewise_construct,
                         std::forward_as_tuple(currTag),
                         std::forward_as_tuple(animName, callback, actionTag, abortTime_sec, callbackStillValidEvenIfTagIsNot));
-}
-
-
-Result AnimationComponent::DisplayFaceImage(const Vision::CompositeImage& compositeImage, 
-                                            u32 frameInterval_ms, u32 duration_ms, 
-                                            bool interruptRunning, bool emptySpriteBoxesAreValid)
-{
-  // TODO: Is this what interruptRunning should mean?
-  //       Or should it queue on anim process side and optionally interrupt currently executing anim?
-  if (IsPlayingAnimation() && !interruptRunning) {
-    LOG_INFO("AnimationComponent.DisplayFaceImage.WontInterruptCurrentAnim", "");
-    return RESULT_FAIL;
-  }
-
-  // Send the image to the animation process in chunks
-  const std::vector<Vision::CompositeImageChunk> imageChunks = compositeImage.GetImageChunks(emptySpriteBoxesAreValid);
-  for(const auto& chunk: imageChunks){
-    _robot->SendRobotMessage<RobotInterface::DisplayCompositeImageChunk>(_compositeImageID, frameInterval_ms, duration_ms, chunk);
-  }
-  
-  if(imageChunks.empty()){
-    LOG_WARNING("AnimationComponent.DisplayFaceImage.NoImageChunksToSend", "");
-    return RESULT_FAIL;
-  }
-
-  _compositeImageID++;
-  return RESULT_OK;
-}
-
-void AnimationComponent::UpdateCompositeImage(const Vision::CompositeImage& compositeImage, u32 applyAt_ms)
-{
-  for(const auto& layoutPair : compositeImage.GetLayerLayoutMap()){
-    Vision::LayerName layerName = layoutPair.first;
-    for(const auto& spritePair : layoutPair.second.GetLayoutMap()){
-      Vision::SerializedSpriteBox serializedSpriteBox = spritePair.second.Serialize();
-      Vision::CompositeImageLayer::SpriteEntry entry;
-      layoutPair.second.GetSpriteEntry(spritePair.second, entry);
-      _robot->SendRobotMessage<RobotInterface::UpdateCompositeImage>(serializedSpriteBox, 
-                                                                     applyAt_ms, 
-                                                                     layerName, 
-                                                                     entry.GetSpriteName());
-    }
-  }
-}
-
-
-void AnimationComponent::ClearCompositeImageLayer(Vision::LayerName layerName, u32 applyAt_ms)
-{
-  // Setup empty sprite entry
-  Vision::CompositeImageLayer::SpriteEntry entry;
-
-  // Setup empty spriteBox
-  Vision::SpriteRenderConfig renderConfig;
-  renderConfig.renderMethod = Vision::SpriteRenderMethod::RGBA;
-  Point2i topLeft(0,0);
-  Vision::CompositeImageLayer::SpriteBox sb(Vision::SpriteBoxName::Count, renderConfig, topLeft, 0, 0);
-  
-  _robot->SendRobotMessage<RobotInterface::UpdateCompositeImage>(sb.Serialize(), 
-                                                                 applyAt_ms, 
-                                                                 layerName, 
-                                                                 entry.GetSpriteName());
 }
 
 void AnimationComponent::AddKeepFaceAliveDisableLock(const std::string& lockName)
@@ -693,21 +746,6 @@ Result AnimationComponent::SendEnableKeepFaceAlive(bool enable, u32 disableTimeo
   }
   
   return res;
-}
-
-Result AnimationComponent::SetDefaultKeepFaceAliveParameters() const
-{
-  return _robot->SendRobotMessage<RobotInterface::SetDefaultKeepFaceAliveParameters>();
-}
-
-Result AnimationComponent::SetKeepFaceAliveParameter(KeepFaceAliveParameter param, f32 value) const
-{
-  return _robot->SendRobotMessage<RobotInterface::SetKeepFaceAliveParameter>(value, param, false);
-}
-  
-Result AnimationComponent::SetKeepFaceAliveParameterToDefault(KeepFaceAliveParameter param) const
-{
-  return _robot->SendRobotMessage<RobotInterface::SetKeepFaceAliveParameter>(0.f, param, true);
 }
 
 Result AnimationComponent::AddOrUpdateEyeShift(const std::string& name, 
@@ -881,21 +919,6 @@ void AnimationComponent::HandleMessage(const ExternalInterface::DisplayFaceImage
 }
 
 template<>
-void AnimationComponent::HandleMessage(const ExternalInterface::SetKeepFaceAliveParameters& msg)
-{
-  if (msg.setUnspecifiedToDefault) {
-    SetDefaultKeepFaceAliveParameters();
-  }
-  
-  if(ANKI_VERIFY(msg.paramNames.size() == msg.paramValues.size(), "AnimationComponent.HandleSetKeepFaceAliveParameters.NameValuePairMismatch", ""))
-  {
-    for (int i=0; i<msg.paramNames.size(); ++i) {
-      SetKeepFaceAliveParameter( msg.paramNames.at(i), msg.paramValues.at(i) );
-    }
-  }
-}
-
-template<>
 void AnimationComponent::HandleMessage(const ExternalInterface::ReadAnimationFile& msg)
 {
   _robot->SendRobotMessage<RobotInterface::AddAnim>(msg.full_path);
@@ -1015,8 +1038,7 @@ void AnimationComponent::AddKeepFaceAliveFocus(const std::string& name)
 {
   if (_focusRequests.empty())
   {
-    SetKeepFaceAliveParameter(KeepFaceAliveParameter::EyeDartMaxDistance_pix,
-                              kEyeDartFocusValue_pix);
+    _robot->SendRobotMessage<RobotInterface::SetKeepFaceAliveFocus>(true);
   }
   _focusRequests.insert(name);
 }
@@ -1026,7 +1048,7 @@ void AnimationComponent::RemoveKeepFaceAliveFocus(const std::string& name)
   _focusRequests.erase(name);
   if (_focusRequests.empty())
   {
-    SetKeepFaceAliveParameterToDefault(KeepFaceAliveParameter::EyeDartMaxDistance_pix); 
+    _robot->SendRobotMessage<RobotInterface::SetKeepFaceAliveFocus>(false);
   }
 }
 

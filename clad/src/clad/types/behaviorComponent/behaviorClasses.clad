@@ -17,6 +17,8 @@ enum uint_8 BehaviorClass {
   HighLevelAI,
   LookAroundInPlace,
   ResetState,
+  SimpleVoiceResponse,
+  StayOnChargerUntilCharged,
   Wait,
 
   // alexa
@@ -72,6 +74,7 @@ enum uint_8 BehaviorClass {
   // coordinators
   CoordinateGlobalInterrupts,
   CoordinateInHabitat,
+  CoordinateWhileHeldInPalm,
   CoordinateWhileInAir,
   QuietModeCoordinator,
 
@@ -92,6 +95,7 @@ enum uint_8 BehaviorClass {
   DevImageCapture,
   DevSquawkBoxTest,
   DevTestBlackjackViz,
+  DevTestSpriteBoxRemaps,
   DevTouchDataCollection,
   DevTurnInPlaceTest,
   DevViewCubeBackpackLights,
@@ -104,19 +108,6 @@ enum uint_8 BehaviorClass {
   PowerSaveTest,
   ReactToBody,
   ReactToGazeDirection,
-
-  // devBehaviors/playpen
-  PlaypenCameraCalibration,
-  PlaypenDistanceSensor,
-  PlaypenDriftCheck,
-  PlaypenDriveForwards,
-  PlaypenEndChecks,
-  PlaypenInitChecks,
-  PlaypenMotorCalibration,
-  PlaypenPickupCube,
-  PlaypenSoundCheck,
-  PlaypenTest,
-  PlaypenWaitToStart,
 
   // devBehaviors/selfTest
   SelfTest,
@@ -146,6 +137,9 @@ enum uint_8 BehaviorClass {
   Exploring,
   ExploringExamineObstacle,
 
+  // eyeColor
+  EyeColorVoiceCommand,
+
   // freeplay/putDownDispatch
   LookForFaceAndCube,
 
@@ -162,6 +156,10 @@ enum uint_8 BehaviorClass {
   // habitat
   ConfirmHabitat,
 
+  // heldInPalm
+  InitialHeldInPalmReaction,
+  ReactToPalmEdge,
+
   // knowledgeGraph
   KnowledgeGraphQuestion,
 
@@ -177,17 +175,13 @@ enum uint_8 BehaviorClass {
   ObservingLookAtFaces,
   ObservingWithoutTurn,
 
-  // onboarding_1p0
-  Onboarding1p0,
-  OnboardingLookAtPhone,
-
-  // onboarding_1p2
+  // onboarding
   OnboardingCoordinator,
 
-  // onboarding_1p2/phases
+  // onboarding/phases
   OnboardingEmulate1p0WaitForVC,
-  OnboardingLookAtPhone1p2,
-  OnboardingLookAtUser1p2,
+  OnboardingLookAtPhone,
+  OnboardingLookAtUser,
   OnboardingTeachWakeWord,
   OnboardingWakeUp,
 
@@ -229,6 +223,7 @@ enum uint_8 BehaviorClass {
 
   // sdkBehaviors
   SDKInterface,
+  SDKLock,
 
   // simpleFaceBehaviors
   DriveToFace,
@@ -257,6 +252,7 @@ enum uint_8 BehaviorClass {
   PoweringRobotOff,
   ReactToTouchPetting,
   ReactToUnclaimedIntent,
+  RobustChargerObservation,
   TrackCube,
   TrackFace,
 

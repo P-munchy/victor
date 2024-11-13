@@ -30,7 +30,9 @@
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/behaviorExternalInterface.h"
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/devBehaviors/behaviorDockingTestSimple.h"
+#include "engine/block.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/components/backpackLights/engineBackpackLightComponent.h"
 #include "engine/components/carryingComponent.h"
 #include "engine/cozmoContext.h"
@@ -407,8 +409,7 @@ void BehaviorDockingTestSimple::BehaviorUpdate()
                                           robot.GetPose(),
                                           {(kRollInsteadOfPickup ? PreActionPose::ROLLING : PreActionPose::DOCKING)},
                                           {_dVars.initialVisionMarker.GetCode()},
-                                          obstacles,
-                                          nullptr);
+                                          obstacles);
         
         if(preActionPoses.empty())
         {
@@ -430,7 +431,7 @@ void BehaviorDockingTestSimple::BehaviorUpdate()
           // Delete the old obstacles we added
           BlockWorldFilter filter;
           filter.SetOriginMode(BlockWorldFilter::OriginMode::InAnyFrame);
-          filter.AddAllowedFamily(ObjectFamily::CustomObject);
+          filter.AddFilterFcn(&BlockWorldFilter::IsCustomObjectFilter);
           robot.GetBlockWorld().DeleteLocatedObjects(filter);
         
           // Add new obstacles at random poses around the preDock pose corresponding with _dVars.initialVisionMarker
@@ -662,8 +663,7 @@ void BehaviorDockingTestSimple::BehaviorUpdate()
                                         robot.GetPose(),
                                         {(kRollInsteadOfPickup ? PreActionPose::ROLLING : PreActionPose::DOCKING)},
                                         {_dVars.initialVisionMarker.GetCode()},
-                                        obstacles,
-                                        nullptr);
+                                        obstacles);
       
       if(preActionPoses.size() != kExpectedNumPreDockPoses)
       {
@@ -675,8 +675,7 @@ void BehaviorDockingTestSimple::BehaviorUpdate()
                                             robot.GetPose(),
                                             {(kRollInsteadOfPickup ? PreActionPose::ROLLING : PreActionPose::DOCKING)},
                                             {_dVars.markerBeingSeen.GetCode()},
-                                            obstacles,
-                                            nullptr);
+                                            obstacles);
           
           if(preActionPoses.size() != kExpectedNumPreDockPoses)
           {
@@ -1022,7 +1021,7 @@ void BehaviorDockingTestSimple::HandleObservedObject(Robot& robot,
     return;
   }
   
-  if(oObject->GetFamily() == ObjectFamily::LightCube)
+  if(IsValidLightCube(oObject->GetType(), false))
   {
     if(_dVars.blockObjectIDPickup.IsSet() && _dVars.blockObjectIDPickup == objectID)
     {

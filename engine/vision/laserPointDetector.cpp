@@ -12,11 +12,11 @@
 
 #include "laserPointDetector.h"
 
-#include "coretech/common/engine/math/quad_impl.h"
-#include "coretech/common/engine/math/rect_impl.h"
-#include "coretech/common/engine/math/linearAlgebra_impl.h"
+#include "coretech/common/engine/math/quad.h"
+#include "coretech/common/shared/math/rect.h"
+#include "coretech/common/engine/math/linearAlgebra.h"
 
-#include "coretech/vision/engine/image_impl.h"
+#include "coretech/vision/engine/image.h"
 #include "coretech/vision/engine/imageCache.h"
 
 #include "engine/vision/visionSystem.h"
@@ -240,7 +240,7 @@ Result LaserPointDetector::Detect(Vision::ImageCache&   imageCache,
                                   const VisionPoseData& poseData,
                                   const bool isDarkExposure,
                                   std::list<ExternalInterface::RobotObservedLaserPoint>& points,
-                                  DebugImageList<Vision::CompressedImage>& debugImages)
+                                  Vision::DebugImageList<Vision::CompressedImage>& debugImages)
 {
   if(!poseData.groundPlaneVisible)
   {
@@ -399,7 +399,7 @@ Result LaserPointDetector::Detect(Vision::ImageCache&   imageCache,
 Result LaserPointDetector::Detect(Vision::ImageCache& imageCache,
                                   const bool isDarkExposure,
                                   std::list<ExternalInterface::RobotObservedLaserPoint>& points,
-                                  DebugImageList<Vision::CompressedImage>& debugImages)
+                                  Vision::DebugImageList<Vision::CompressedImage>& debugImages)
 {
 
   Point2f centroidInImage(0.f, 0.f);

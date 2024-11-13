@@ -64,8 +64,8 @@ bool BehaviorTrackCube::WantsToBeActivatedBehavior() const
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorTrackCube::GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const
 {
-  modifiers.visionModesForActivatableScope->insert( {VisionMode::DetectingMarkers, EVisionUpdateFrequency::High} );
-  modifiers.visionModesForActiveScope->insert( {VisionMode::DetectingMarkers, EVisionUpdateFrequency::High} );
+  modifiers.visionModesForActivatableScope->insert( {VisionMode::Markers, EVisionUpdateFrequency::High} );
+  modifiers.visionModesForActiveScope->insert( {VisionMode::Markers, EVisionUpdateFrequency::High} );
   modifiers.behaviorAlwaysDelegates = false;
 }
   
@@ -94,8 +94,7 @@ void BehaviorTrackCube::OnBehaviorActivated()
 ObjectID BehaviorTrackCube::GetVisibleCube() const
 {
   BlockWorldFilter filter;
-  filter.AddAllowedFamily(ObjectFamily::LightCube);
-  filter.SetFilterFcn(nullptr);
+  filter.AddFilterFcn(&BlockWorldFilter::IsLightCubeFilter);
   
   // list of visible cubes, sorted by how close they are in asc order
   std::map<float, const ObservableObject*> objectsByDist;

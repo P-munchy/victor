@@ -55,6 +55,31 @@ bool ProtoCladInterpreter::Redirect(
       ProtoListAnimationsRequestToClad(proto_message, clad_message);
       break;
     }
+    case external_interface::GatewayWrapper::kPlayAnimationTriggerRequest:
+    {
+      ProtoPlayAnimationTriggerRequestToClad(proto_message, clad_message);
+      break;
+    }
+    case external_interface::GatewayWrapper::kCancelActionByIdTagRequest:
+    {
+      ProtoCancelActionByIdTagRequestToClad(proto_message, clad_message);
+      break;
+    }
+    case external_interface::GatewayWrapper::kStopAllMotorsRequest:
+    {
+      ProtoStopAllMotorsRequestToClad(proto_message, clad_message);
+      break;
+    }
+    case external_interface::GatewayWrapper::kSetFaceToEnrollRequest:
+    {
+      ProtoSetFaceToEnrollRequestToClad(proto_message, clad_message);
+      break;
+    }
+    case external_interface::GatewayWrapper::kCameraConfigRequest:
+    {
+      ProtoCameraConfigRequestToClad(proto_message, clad_message);
+      break;
+    }
     default:
     {
       return false;
@@ -82,6 +107,16 @@ bool ProtoCladInterpreter::Redirect(
       CladEndOfMessageToProto(message, proto_message);
       break;
     }
+    case ExternalInterface::MessageEngineToGameTag::PerRobotSettings:
+    {
+      CladPerRobotSettingsToProto(message, proto_message);
+      break;
+    }
+    case ExternalInterface::MessageEngineToGameTag::CurrentCameraParams:
+    { 
+      CladCurrentCameraParamsToProto(message, proto_message);
+      break;
+    }
     default:
     {
       return false;
@@ -106,6 +141,16 @@ bool ProtoCladInterpreter::Redirect(
     case ExternalInterface::MessageGameToEngineTag::PlayAnimation:
     {
       CladPlayAnimationToProto(message, proto_message);
+      break;
+    }
+    case ExternalInterface::MessageGameToEngineTag::CancelActionByIdTag:
+    {
+      CladCancelActionByIdTagToProto(message, proto_message);
+      break;
+    }
+    case ExternalInterface::MessageGameToEngineTag::StopAllMotors:
+    {
+      CladCancelActionByIdTagToProto(message, proto_message);
       break;
     }
     default:
@@ -141,6 +186,14 @@ void ProtoCladInterpreter::ProtoPlayAnimationRequestToClad(
   clad_message.Set_PlayAnimation(play_animation);
 }
 
+void ProtoCladInterpreter::ProtoCancelActionByIdTagRequestToClad(
+    const external_interface::GatewayWrapper& proto_message,
+    ExternalInterface::MessageGameToEngine& clad_message) {
+  Anki::Vector::ExternalInterface::CancelActionByIdTag cancel_action_by_id_tag;
+  cancel_action_by_id_tag.idTag =  proto_message.cancel_action_by_id_tag_request().id_tag();
+  clad_message.Set_CancelActionByIdTag(cancel_action_by_id_tag);
+}
+
 void ProtoCladInterpreter::ProtoListAnimationsRequestToClad(
     const external_interface::GatewayWrapper& proto_message,
     ExternalInterface::MessageGameToEngine& clad_message) {
@@ -148,6 +201,45 @@ void ProtoCladInterpreter::ProtoListAnimationsRequestToClad(
   clad_message.Set_RequestAvailableAnimations(request_available_animations);
 }
 
+void ProtoCladInterpreter::ProtoPlayAnimationTriggerRequestToClad(
+    const external_interface::GatewayWrapper& proto_message,
+    ExternalInterface::MessageGameToEngine& clad_message) {
+  Anki::Vector::ExternalInterface::PlayAnimationTrigger play_animation_trigger;
+  play_animation_trigger.trigger = AnimationTriggerFromString( proto_message.play_animation_trigger_request().animation_trigger().name() );
+  play_animation_trigger.useLiftSafe = proto_message.play_animation_trigger_request().use_lift_safe();
+  play_animation_trigger.ignoreBodyTrack = proto_message.play_animation_trigger_request().ignore_body_track();
+  play_animation_trigger.ignoreHeadTrack = proto_message.play_animation_trigger_request().ignore_head_track();
+  play_animation_trigger.ignoreLiftTrack = proto_message.play_animation_trigger_request().ignore_lift_track();
+  play_animation_trigger.numLoops = proto_message.play_animation_trigger_request().loops();
+  clad_message.Set_PlayAnimationTrigger(play_animation_trigger);
+}
+
+void ProtoCladInterpreter::ProtoStopAllMotorsRequestToClad(
+    const external_interface::GatewayWrapper& proto_message,
+    ExternalInterface::MessageGameToEngine& clad_message) {
+  Anki::Vector::ExternalInterface::StopAllMotors stop_all_motors;
+  clad_message.Set_StopAllMotors(stop_all_motors);
+}
+
+void ProtoCladInterpreter::ProtoSetFaceToEnrollRequestToClad(
+    const external_interface::GatewayWrapper& proto_message,
+    ExternalInterface::MessageGameToEngine& clad_message) {
+  Anki::Vector::ExternalInterface::SetFaceToEnroll set_face_to_enroll;
+  set_face_to_enroll.name = proto_message.set_face_to_enroll_request().name();
+  set_face_to_enroll.observedID = proto_message.set_face_to_enroll_request().observed_id();
+  set_face_to_enroll.saveID = proto_message.set_face_to_enroll_request().save_id();
+  set_face_to_enroll.saveToRobot = proto_message.set_face_to_enroll_request().save_to_robot();
+  set_face_to_enroll.sayName = proto_message.set_face_to_enroll_request().say_name();
+  set_face_to_enroll.useMusic = proto_message.set_face_to_enroll_request().use_music();
+  clad_message.Set_SetFaceToEnroll(set_face_to_enroll);
+}
+
+void ProtoCladInterpreter::ProtoCameraConfigRequestToClad(
+    const external_interface::GatewayWrapper& proto_message,
+    ExternalInterface::MessageGameToEngine& clad_message) {
+  Anki::Vector::ExternalInterface::RequestRobotSettings request_settings;
+  clad_message.Set_RequestRobotSettings(request_settings);
+}
 
 void ProtoCladInterpreter::CladDriveWheelsToProto(
     const ExternalInterface::MessageGameToEngine& clad_message,
@@ -163,6 +255,13 @@ void ProtoCladInterpreter::CladPlayAnimationToProto(
   proto_message = ExternalMessageRouter::WrapResponse(play_animation_response);
 }
 
+void ProtoCladInterpreter::CladCancelActionByIdTagToProto(
+    const ExternalInterface::MessageGameToEngine& clad_message,
+    external_interface::GatewayWrapper& proto_message) { 
+  external_interface::CancelActionByIdTagResponse* cancel_action_by_id_tag_response = new external_interface::CancelActionByIdTagResponse;
+  proto_message = ExternalMessageRouter::WrapResponse(cancel_action_by_id_tag_response);
+}
+
 void ProtoCladInterpreter::CladAnimationAvailableToProto(
     const ExternalInterface::MessageEngineToGame& clad_message, 
     external_interface::GatewayWrapper& proto_message) {
@@ -172,16 +271,50 @@ void ProtoCladInterpreter::CladAnimationAvailableToProto(
   proto_message = ExternalMessageRouter::WrapResponse(list_animations_response);
 }
 
+void ProtoCladInterpreter::CladStopAllMotorsToProto(
+    const ExternalInterface::MessageGameToEngine& clad_message,
+    external_interface::GatewayWrapper& proto_message) { 
+  external_interface::StopAllMotorsResponse* stop_all_motors_response = new external_interface::StopAllMotorsResponse;
+  proto_message = ExternalMessageRouter::WrapResponse(stop_all_motors_response);
+}
+
+
 void ProtoCladInterpreter::CladEndOfMessageToProto(
     const ExternalInterface::MessageEngineToGame& clad_message, 
     external_interface::GatewayWrapper& proto_message) {
   external_interface::ListAnimationsResponse* end_of_list_animations_response = 
       new external_interface::ListAnimationsResponse;
-  // Don't change "EndOfListAnimationsResponses" - The .go recipient depends upon it.
+  // Don't change "EndOfListAnimationsResponses" - vic-gateway depends upon it.
   end_of_list_animations_response->add_animation_names()->set_name("EndOfListAnimationsResponses");
   proto_message = ExternalMessageRouter::WrapResponse(end_of_list_animations_response);
 }
 
+void ProtoCladInterpreter::CladPerRobotSettingsToProto(
+    const ExternalInterface::MessageEngineToGame& clad_message, 
+    external_interface::GatewayWrapper& proto_message) {
+  external_interface::CameraConfigResponse* camera_config_response = new external_interface::CameraConfigResponse;
+  camera_config_response->set_focal_length_x(clad_message.Get_PerRobotSettings().cameraConfig.focalLengthX);
+  camera_config_response->set_focal_length_y(clad_message.Get_PerRobotSettings().cameraConfig.focalLengthY);
+  camera_config_response->set_center_x(clad_message.Get_PerRobotSettings().cameraConfig.centerX);
+  camera_config_response->set_center_y(clad_message.Get_PerRobotSettings().cameraConfig.centerY);
+  camera_config_response->set_fov_x(clad_message.Get_PerRobotSettings().cameraConfig.fovX);  // Full FOV in degrees
+  camera_config_response->set_fov_y(clad_message.Get_PerRobotSettings().cameraConfig.fovY);  // Full FOV in degrees
+  camera_config_response->set_min_camera_exposure_time_ms(clad_message.Get_PerRobotSettings().cameraConfig.minCameraExposureTime_ms);
+  camera_config_response->set_max_camera_exposure_time_ms(clad_message.Get_PerRobotSettings().cameraConfig.maxCameraExposureTime_ms);
+  camera_config_response->set_min_camera_gain(clad_message.Get_PerRobotSettings().cameraConfig.minCameraGain);
+  camera_config_response->set_max_camera_gain(clad_message.Get_PerRobotSettings().cameraConfig.maxCameraGain);
+  proto_message = ExternalMessageRouter::WrapResponse(camera_config_response);
+}
+
+void ProtoCladInterpreter::CladCurrentCameraParamsToProto(
+    const ExternalInterface::MessageEngineToGame& clad_message, 
+    external_interface::GatewayWrapper& proto_message) {
+  external_interface::CameraSettingsUpdate* current_camera_settings = new external_interface::CameraSettingsUpdate;
+  current_camera_settings->set_gain(clad_message.Get_CurrentCameraParams().cameraGain);
+  current_camera_settings->set_exposure_ms(clad_message.Get_CurrentCameraParams().exposure_ms);
+  current_camera_settings->set_auto_exposure_enabled(clad_message.Get_CurrentCameraParams().autoExposureEnabled);
+  proto_message = ExternalMessageRouter::Wrap(current_camera_settings);
+}
 
 } // namespace Vector
 } // namespace Anki

@@ -25,23 +25,21 @@
 #include "util/logging/callstack.h"
 #include "util/logging/logtypes.h"
 
-#if defined(USE_ANKITRACE)
 #include "platform/anki-trace/tracing.h"
-#else
-#define tracepoint(p,f,c)
-#define tracelog(e,m,...)
-#endif
 
 #include <string>
 #include <vector>
+#include <stdio.h>
 
 #ifndef ALLOW_DEBUG_LOGGING
 #define ALLOW_DEBUG_LOGGING ANKI_DEVELOPER_CODE
 #endif
 
 #if !defined(ANKI_BREADCRUMBS)
-#define ANKI_BREADCRUMBS 1
+#define ANKI_BREADCRUMBS 0
 #endif
+
+#define MAX_LOG_STRING_LEN 1024
 
 namespace Anki {
 namespace Util {
@@ -73,7 +71,7 @@ void sPopErrG();            // Restores errG to its value before calling sPushEr
 
 // Global flag to control break-on-error behavior
 extern bool _errBreakOnError;
-  
+
 // If true, access to the global error flag uses a mutex device. Changing this value while logging could
 // lead to a mutex lock, so don't.
 extern bool _lockErrG;
@@ -190,9 +188,15 @@ __attribute__((noreturn)) void sAbort();
 // Logging with names.
 //
 #define PRINT_NAMED_ERROR(name, format, ...) do { \
-  tracelog(TRACE_ERR, format, ##__VA_ARGS__); \
-  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sErrorF(name, {}, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_ERR, "%s %s", name, PRINT_LOG_VAR_logString);        \
+    ::Anki::Util::sErrorF(name, {}, "%s", PRINT_LOG_VAR_logString);     \
+  } else { \
+    ::Anki::Util::sErrorF(name, {}, format, ##__VA_ARGS__); \
+  } \
+  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);       \
   ::Anki::Util::sSetErrG(); \
   if (::Anki::Util::_errBreakOnError) { \
     ::Anki::Util::sDebugBreakOnError(); \
@@ -200,26 +204,48 @@ __attribute__((noreturn)) void sAbort();
 } while(0)
 
 #define PRINT_NAMED_WARNING(name, format, ...) do { \
-  tracelog(TRACE_WARNING, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];\
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__);\
+    tracelog(TRACE_WARNING, "%s %s", name, PRINT_LOG_VAR_logString);\
+    ::Anki::Util::sWarningF(name, {}, "%s", PRINT_LOG_VAR_logString);\
+  } else { \
+    ::Anki::Util::sWarningF(name, {}, format, ##__VA_ARGS__);\
+  } \
   ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sWarningF(name, {}, format, ##__VA_ARGS__); \
 } while(0)
 
 #define PRINT_NAMED_INFO(name, format, ...) do { \
-  tracelog(TRACE_INFO, format, ##__VA_ARGS__); \
-  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sChanneledInfoF(name, name, {}, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_INFO, "%s %s", name, PRINT_LOG_VAR_logString);       \
+    ::Anki::Util::sChanneledInfoF(name, name, {}, "%s", PRINT_LOG_VAR_logString); \
+  } else { \
+    ::Anki::Util::sChanneledInfoF(name, name, {}, format, ##__VA_ARGS__); \
+  } \
+  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);              \
 } while(0)
 
 #if ALLOW_DEBUG_LOGGING
 #define PRINT_NAMED_DEBUG(name, format, ...) do { \
-  tracelog(TRACE_DEBUG, format, ##__VA_ARGS__); \
-  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sChanneledDebugF(name, name, {}, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN]; \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_DEBUG, "%s %s", name, PRINT_LOG_VAR_logString); \
+    ::Anki::Util::sChanneledDebugF(name, name, {}, "%s", PRINT_LOG_VAR_logString); \
+  } else { \
+    ::Anki::Util::sChanneledDebugF(name, name, {}, format, ##__VA_ARGS__); \
+  } \
+  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);              \
 } while(0)
 #else
 #define PRINT_NAMED_DEBUG(name, format, ...) do { \
-  tracelog(TRACE_DEBUG, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN]; \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_DEBUG, "%s %s", name, PRINT_LOG_VAR_logString); \
+  } \
   ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);  \
 } while(0)
 #endif
@@ -271,20 +297,36 @@ __attribute__((noreturn)) void sAbort();
 // Logging with channels.
 //
 #define PRINT_CH_INFO(channel, name, format, ...) do { \
-  tracelog(TRACE_INFO, format, ##__VA_ARGS__);  \
-  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sChanneledInfoF(channel, name, {}, format, ##__VA_ARGS__); \
+  if(ANKITRACE_ENABLED) { \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_INFO, "%s %s %s", channel, name, PRINT_LOG_VAR_logString); \
+    ::Anki::Util::sChanneledInfoF(channel, name, {}, "%s", PRINT_LOG_VAR_logString); \
+  } else { \
+    ::Anki::Util::sChanneledInfoF(channel, name, {}, format, ##__VA_ARGS__); \
+  } \
+  ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);  \
 } while(0)
 
 #if ALLOW_DEBUG_LOGGING
 #define PRINT_CH_DEBUG(channel, name, format, ...) do { \
-  tracelog(TRACE_DEBUG, format, ##__VA_ARGS__);           \
+  if(ANKITRACE_ENABLED) {                                               \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_DEBUG, "%s %s %s", channel, name, PRINT_LOG_VAR_logString); \
+    ::Anki::Util::sChanneledDebugF(channel, name, {}, "%s", PRINT_LOG_VAR_logString); \
+  } else { \
+    ::Anki::Util::sChanneledDebugF(channel, name, {}, format, ##__VA_ARGS__); \
+  } \
   ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__); \
-  ::Anki::Util::sChanneledDebugF(channel, name, {}, format, ##__VA_ARGS__); \
 } while(0)
 #else
 #define PRINT_CH_DEBUG(channel, name, format, ...) do { \
-  tracelog(TRACE_DEBUG, format, ##__VA_ARGS__);              \
+  if(ANKITRACE_ENABLED) {                                               \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_DEBUG, "%s %s %s", channel, name, PRINT_LOG_VAR_logString); \
+  } \
   ::Anki::Util::DropBreadcrumb(false, __FILE__, __LINE__);   \
 } while(0)
 #endif
@@ -305,12 +347,24 @@ __attribute__((noreturn)) void sAbort();
 
 // Actually use these in your code (not the helper above)
 #define PRINT_PERIODIC_CH_INFO(period, channel, name, format, ...)  \
-  tracelog(TRACE_INFO, format, ##__VA_ARGS__);                         \
-  PRINT_PERIODIC_CH_HELPER(sChanneledInfoF, period, channel, name, format, ##__VA_ARGS__)
+  if(ANKITRACE_ENABLED) {                                               \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                     \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_INFO, "%d %s %s %s", period, channel, name, PRINT_LOG_VAR_logString); \
+    PRINT_PERIODIC_CH_HELPER(sChanneledInfoF, period, channel, name, "%s", PRINT_LOG_VAR_logString) \
+  } else { \
+    PRINT_PERIODIC_CH_HELPER(sChanneledInfoF, period, channel, name, format, ##__VA_ARGS__) \
+  }
 
 #define PRINT_PERIODIC_CH_DEBUG(period, channel, name, format, ...) \
-  tracelog(TRACE_DEBUG, format, ##__VA_ARGS__);                      \
-  PRINT_PERIODIC_CH_HELPER(sChanneledDebugF, period, channel, name, format, ##__VA_ARGS__)
+  if(ANKITRACE_ENABLED) {                                               \
+    char PRINT_LOG_VAR_logString[MAX_LOG_STRING_LEN];                                   \
+    snprintf(PRINT_LOG_VAR_logString, MAX_LOG_STRING_LEN, format, ##__VA_ARGS__); \
+    tracelog(TRACE_DEBUG, "%d %s %s %s", period, channel, name, PRINT_LOG_VAR_logString); \
+    PRINT_PERIODIC_CH_HELPER(sChanneledDebugF, period, channel, name, "%s", PRINT_LOG_VAR_logString) \
+  } else { \
+      PRINT_PERIODIC_CH_HELPER(sChanneledDebugF, period, channel, name, format, ##__VA_ARGS__) \
+  }
 
 // Streams
 #define PRINT_STREAM_ERROR(name, args) do{         \
@@ -424,7 +478,6 @@ __attribute__((noreturn)) void sAbort();
 #if ANKI_DEV_ASSERT_ENABLED
 
 #define DEV_ASSERT_MSG(expr, name, format, ...) do { \
-  ::Anki::Util::DropBreadcrumb(expr ? true : false, __FILE__, __LINE__); \
   if (!(expr)) { \
     PRINT_NAMED_ERROR(name, "ASSERT(%s): " format, #expr, ##__VA_ARGS__); \
     Anki::Util::sDumpCallstack("ASSERT"); \
@@ -442,7 +495,6 @@ __attribute__((noreturn)) void sAbort();
 // but the entire block will be discarded by the optimizer because it can't be executed.
 //
 #define DEV_ASSERT_MSG(expr, name, format, ...) do { \
-  ::Anki::Util::DropBreadcrumb(expr ? true : false, __FILE__, __LINE__); \
   if (false) { \
     if (!(expr)) { \
       PRINT_NAMED_ERROR(name, "ASSERT(%s): " format, #expr, ##__VA_ARGS__); \

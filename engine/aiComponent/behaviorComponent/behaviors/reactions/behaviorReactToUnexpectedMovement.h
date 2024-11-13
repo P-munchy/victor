@@ -24,8 +24,6 @@ namespace Vector {
 class BehaviorReactToUnexpectedMovement : public ICozmoBehavior
 {
 private:
-  using super = ICozmoBehavior;
-  
   friend class BehaviorFactory;
   BehaviorReactToUnexpectedMovement(const Json::Value& config);
 
@@ -41,10 +39,17 @@ private:
   bool ShouldAskForHelp() const;
   
   void ResetActivationHistory();
+  
+  // Transition helpers
+  void TransitionToAskForHelp();
+  
+  void TransitionToEmergencyRetreatAction();
 
   struct InstanceConfig {
     InstanceConfig();
     InstanceConfig(const Json::Value& config, const std::string& debugName);
+    
+    bool enableRepeatedActivationChecks = false;
 
     float repeatedActivationCheckWindow_sec = 0.f;
     size_t numRepeatedActivationsAllowed = 0;
@@ -56,6 +61,8 @@ private:
     float repeatedActivationDetectionsCheckWindow_sec = 0.f;
     u32 numRepeatedActivationDetectionsAllowed = 0;
     ICozmoBehaviorPtr askForHelpBehavior;
+    
+    bool lockTreadsDuringAnim = false;
   };
   
   struct DynamicVariables {

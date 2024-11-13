@@ -21,7 +21,7 @@
 #include "coretech/common/engine/math/pose.h"
 #include "coretech/common/engine/robotTimeStamp.h"
 #include "anki/common/constantsAndMacros.h"
-#include "coretech/common/shared/radians.h"
+#include "coretech/common/shared/math/radians.h"
 
 namespace Anki {
 namespace Vector {
@@ -44,7 +44,7 @@ protected:
   virtual bool AreConditionsMetInternal(BehaviorExternalInterface& behaviorExternalInterface) const override;
   virtual void HandleEvent(const EngineToGameEvent& event, BehaviorExternalInterface& behaviorExternalInterface) override;
   virtual void GetRequiredVisionModes(std::set<VisionModeRequest>& requiredVisionModes) const override {
-    requiredVisionModes.insert({ VisionMode::DetectingMarkers, EVisionUpdateFrequency::Low });
+    requiredVisionModes.insert({ VisionMode::Markers, EVisionUpdateFrequency::Low });
   }
 private:
   // Default configuration parameters which can be overridden by JSON config

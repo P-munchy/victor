@@ -13,7 +13,6 @@
 
 #include "engine/actions/trackGroundPointAction.h"
 
-#include "engine/blockWorld/blockWorld.h"
 #include "engine/components/movementComponent.h"
 #include "engine/components/visionComponent.h"
 #include "engine/externalInterface/externalInterface.h"
@@ -46,7 +45,7 @@ void TrackGroundPointAction::GetRequiredVisionModes(std::set<VisionModeRequest>&
   {
     case ExternalInterface::MessageEngineToGameTag::RobotObservedLaserPoint:
     {
-      requests.insert({ VisionMode::DetectingLaserPoints, EVisionUpdateFrequency::High });
+      requests.insert({ VisionMode::Lasers, EVisionUpdateFrequency::High });
       break;
     }
       

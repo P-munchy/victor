@@ -101,6 +101,7 @@ bool BehaviorCountingAnimation::WantsToBeActivatedBehavior() const
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorCountingAnimation::GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const
 {
+  modifiers.wantsToBeActivatedWhenOffTreads = true;
 }
 
 
@@ -116,7 +117,7 @@ void BehaviorCountingAnimation::GetBehaviorJsonKeys(std::set<const char*>& expec
 
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-void BehaviorCountingAnimation::SetCountTarget(uint32_t target, std::string announcement)
+void BehaviorCountingAnimation::SetCountTarget(uint32_t target, const std::string & announcement)
 {
   _dVars.target = target;
   _dVars.announcement = announcement;
@@ -210,7 +211,7 @@ void BehaviorCountingAnimation::SetCountParameters()
 
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-void BehaviorCountingAnimation::OnBehaviorActivated() 
+void BehaviorCountingAnimation::OnBehaviorActivated()
 {
 
   SetCountParameters();

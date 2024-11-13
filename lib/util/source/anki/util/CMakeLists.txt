@@ -25,12 +25,19 @@ if (ANDROID)
   set(PLATFORM_LIBS log)
 elseif (VICOS)
   set(PLATFORM_LIBS log)
+  target_include_directories(util
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>)
 elseif (MACOSX)
   find_library(FOUNDATION Foundation)
   set(PLATFORM_LIBS ${FOUNDATION})
+  target_include_directories(util
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>)
 endif()
 
 target_link_libraries(util
+  PUBLIC
   # anki libs
   clad
   util_clad
@@ -40,6 +47,7 @@ target_link_libraries(util
   hdr_histogram_static
   ${ANKITRACE}
   ${PLATFORM_LIBS}
+  ${ASAN_SHARED_LINKER_FLAGS}
 )
 
 anki_build_strip(TARGET util)

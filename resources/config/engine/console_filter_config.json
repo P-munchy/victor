@@ -15,6 +15,8 @@
     [
       { "channel": "Actions",                           "enabled": true  },
       { "channel": "AIWhiteboard",                      "enabled": true  },
+      { "channel": "Alexa",                             "enabled": true  },
+      { "channel": "Audio",                             "enabled": true  },
       { "channel": "Behaviors",                         "enabled": true  },
       { "channel": "BlockPool",                         "enabled": true  },
       { "channel": "BlockWorld",                        "enabled": true  },
@@ -27,11 +29,11 @@
       { "channel": "Microphones",                       "enabled": false },
       { "channel": "NeuralNets",                        "enabled": true  },
       { "channel": "PerfMetric",                        "enabled": true  },
-      { "channel": "PoseConfirmer",                     "enabled": true  },
+      { "channel": "RobotTest",                         "enabled": true  },
       { "channel": "SpeechRecognizer",                  "enabled": false },
       { "channel": "VisionComponent",                   "enabled": true  },
       { "channel": "VisionSystem",                      "enabled": true  },
-      { "channel": "Alexa",                             "enabled": true  },
+      { "channel": "BehaviorSDKInterface",              "enabled": true  },
       { "channel": "*",                                 "enabled": false } // must come last, no comma
     ],
     "levels":
@@ -50,6 +52,8 @@
     [
       { "channel": "Actions",                           "enabled": false },
       { "channel": "AIWhiteboard",                      "enabled": false },
+      { "channel": "Alexa",                             "enabled": false },
+      { "channel": "Audio",                             "enabled": false },
       { "channel": "Behaviors",                         "enabled": false },
       { "channel": "BlockPool",                         "enabled": false },
       { "channel": "BlockWorld",                        "enabled": false },
@@ -61,11 +65,11 @@
       { "channel": "Microphones",                       "enabled": false },
       { "channel": "NeuralNets",                        "enabled": false },
       { "channel": "PerfMetric",                        "enabled": true  },
-      { "channel": "PoseConfirmer",                     "enabled": false },
+      { "channel": "RobotTest",                         "enabled": true  },
       { "channel": "SpeechRecognizer",                  "enabled": false },
       { "channel": "VisionComponent",                   "enabled": false },
       { "channel": "VisionSystem",                      "enabled": false },
-      { "channel": "Alexa",                             "enabled": false },
+      { "channel": "BehaviorSDKInterface",              "enabled": false },
       { "channel": "*",                                 "enabled": false } // must come last, no comma
     ],
     "levels":

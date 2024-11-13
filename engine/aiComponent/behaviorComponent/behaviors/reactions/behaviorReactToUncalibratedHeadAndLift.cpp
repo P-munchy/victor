@@ -36,15 +36,11 @@ namespace Anki {
 namespace Vector {
 
 namespace {
-  static const std::set<BehaviorID> kDoNotInterruptBehaviorIds = {
-    BEHAVIOR_ID(NoCloud),
-    BEHAVIOR_ID(NoWifi),
-  };
   
   static const std::set<BehaviorClass> kDoNotInterruptBehaviorClasses = {
     BEHAVIOR_CLASS(BlackJack),
     BEHAVIOR_CLASS(FistBump),
-    BEHAVIOR_CLASS(TakeAPhotoCoordinator),
+    BEHAVIOR_CLASS(Alexa),
   };
 }
 
@@ -65,12 +61,19 @@ bool BehaviorReactToUncalibratedHeadAndLift::WantsToBeActivatedBehavior() const
   // This shouldn't interrupt pending intents. Its a rare coincidence, except apparently when transitioning from
   // onboarding to normal operation with a pending intent, when it happens constantly... could be my robot is kinda
   // borked... but this shouldn't hurt anything.
-  const bool userIntentPending = GetBehaviorComp<UserIntentComponent>().IsAnyUserIntentPending();
+  auto& uic = GetBehaviorComp<UserIntentComponent>();
+  const bool userIntentPending = uic.IsAnyUserIntentPending();
+  const bool userIntentActive  = uic.IsAnyUserIntentActive();
+  const bool triggerPending = uic.IsTriggerWordPending();
+  const bool isListening = uic.IsCloudStreamOpen();
   const bool inPowerSaveMode = GetBEI().GetPowerStateManager().InPowerSaveMode();
   const bool isAnimating = GetBEI().GetAnimationComponent().IsPlayingAnimation();
   bool shouldActivate = !inPowerSaveMode &&
                         !isAnimating &&
                         !userIntentPending &&
+                        !userIntentActive &&
+                        !triggerPending &&
+                        !isListening &&
                         (GetBEI().GetRobotInfo().IsHeadMotorOutOfBounds() ||
                          GetBEI().GetRobotInfo().IsLiftMotorOutOfBounds() ||
                          GetBEI().GetRobotInfo().IsHeadEncoderInvalid()   ||
@@ -80,9 +83,8 @@ bool BehaviorReactToUncalibratedHeadAndLift::WantsToBeActivatedBehavior() const
     // If a calibration seems necessary, first verify that we are not in a behavior which we know can cause an encoder
     // to become invalid since manipulation by user is expected.
     const auto checkInterruptCallback = [&shouldActivate](const ICozmoBehavior& behavior)->bool {
-      const bool idActive = (kDoNotInterruptBehaviorIds.find(behavior.GetID()) != kDoNotInterruptBehaviorIds.end());
       const bool classActive = (kDoNotInterruptBehaviorClasses.find(behavior.GetClass()) != kDoNotInterruptBehaviorClasses.end());
-      if (idActive || classActive) {
+      if (classActive) {
         shouldActivate = false;
         return false; // stop iterating
       }

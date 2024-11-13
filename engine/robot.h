@@ -17,10 +17,8 @@
  * Copyright: Anki, Inc. 2013
  **/
 
-#ifndef ANKI_COZMO_BASESTATION_ROBOT_H
-#define ANKI_COZMO_BASESTATION_ROBOT_H
-
-#include "anki/cozmo/shared/animationTag.h"
+#ifndef ANKI_VECTOR_BASESTATION_ROBOT_H
+#define ANKI_VECTOR_BASESTATION_ROBOT_H
 
 #include "engine/actionableObject.h"
 #include "engine/contextWrapper.h"
@@ -31,27 +29,9 @@
 #include "engine/fullRobotPose.h"
 #include "engine/robotComponents_fwd.h"
 
-#include "coretech/common/engine/math/pose.h"
-#include "coretech/common/shared/types.h"
-#include "coretech/vision/engine/camera.h"
-#include "coretech/vision/engine/image.h"
-#include "coretech/common/engine/robotTimeStamp.h"
-#include "coretech/vision/engine/visionMarker.h"
-
-#include "clad/types/animationTypes.h"
-#include "clad/types/imageTypes.h"
-#include "clad/types/ledTypes.h"
-#include "clad/types/robotStatusAndActions.h"
-
 #include "util/entityComponent/dependencyManagedEntity.h"
 #include "util/entityComponent/entity.h"
 #include "util/helpers/noncopyable.h"
-#include "util/signals/simpleSignal.hpp"
-
-#include <queue>
-#include <time.h>
-#include <unordered_map>
-#include <utility>
 
 
 namespace Anki {
@@ -90,10 +70,10 @@ enum class EngineErrorCode : uint8_t;
 class FaceWorld;
 class IExternalInterface;
 class IGatewayInterface;
+class LocaleComponent;
 class MoodManager;
 class MovementComponent;
 class NVStorageComponent;
-class ObjectPoseConfirmer;
 enum class OffTreadsState : int8_t;
 class PetWorld;
 class PhotographyManager;
@@ -105,7 +85,6 @@ class RobotStateHistory;
 class HistRobotState;
 class IExternalInterface;
 struct RobotState;
-class ActiveCube;
 class CubeLightComponent;
 class BackpackLightComponent;
 class RobotToEngineImplMessaging;
@@ -118,6 +97,7 @@ class DockingComponent;
 class CarryingComponent;
 class CliffSensorComponent;
 class ProxSensorComponent;
+class RangeSensorComponent;
 class TouchSensorComponent;
 class ImuComponent;
 class AnimationComponent;
@@ -151,7 +131,7 @@ namespace external_interface {
 class RobotState;
 }
 
-// indent 2 spaces << that way !!!! coding standards !!!!
+
 class Robot : private Util::noncopyable
 {
 public:
@@ -247,11 +227,11 @@ public:
   INLINE_GETTERS(DrivingAnimationHandler)
   INLINE_GETTERS(FaceWorld)
   INLINE_GETTERS(HabitatDetectorComponent)
+  INLINE_GETTERS(LocaleComponent)
   INLINE_GETTERS(MapComponent)
   INLINE_GETTERS(MicComponent)
   INLINE_GETTERS(MoodManager)
   INLINE_GETTERS(NVStorageComponent)
-  INLINE_GETTERS(ObjectPoseConfirmer)
   INLINE_GETTERS(PathComponent)
   INLINE_GETTERS(PetWorld)
   INLINE_GETTERS(PhotographyManager)
@@ -271,6 +251,9 @@ public:
   #undef INLINE_GETTERS
 
   const PoseOriginList& GetPoseOriginList() const { return *_poseOrigins.get(); }
+
+  inline RangeSensorComponent& GetRangeSensorComponent() {return GetComponent<RangeSensorComponent>(); }
+  inline const RangeSensorComponent& GetRangeSensorComponent() const {return GetComponent<RangeSensorComponent>(); }
 
   inline BlockTapFilterComponent& GetBlockTapFilter() {return GetComponent<BlockTapFilterComponent>();}
   inline const BlockTapFilterComponent& GetBlockTapFilter() const {return GetComponent<BlockTapFilterComponent>();}
@@ -411,6 +394,9 @@ public:
   // Get pitch angle of robot
   Radians GetPitchAngle() const;
 
+  // Get roll angle of robot
+  Radians GetRollAngle() const;
+
   // Return current bounding height of the robot, taking into account whether lift
   // is raised
   f32 GetHeight() const;
@@ -437,6 +423,7 @@ public:
   // Returns true if being moved enough to believe robot is being held by a person.
   // Note: Can only be true if IsPickedUp() is also true.
   bool IsBeingHeld() const { return _isBeingHeld; }
+  EngineTimeStamp_t GetBeingHeldLastChangedTime_ms() const { return _timeHeldStateChanged_ms; }
 
   // =========== IMU Data =============
 
@@ -578,19 +565,6 @@ public:
 
   bool SetLocale(const std::string & locale);
 
-  // Whether or not the encoders have been "disabled". 
-  // (In reality they are operating at a lower frequency so that motion can be detected.)
-  // This happens normally if the motors are not actively being driven.
-  bool AreEncodersDisabled() const { return IsStatusFlagSet(RobotStatusFlag::ENCODERS_DISABLED); }
-
-  // Whether or not the head was detected to have moved while the encoders were "disabled"
-  // i.e. Calibration is necessary!
-  bool IsHeadEncoderInvalid() const { return IsStatusFlagSet(RobotStatusFlag::ENCODER_HEAD_INVALID); }
-
-  // Whether or not the lift was detected to have moved while the encoders were "disabled"
-  // i.e. Calibration is necessary!
-  bool IsLiftEncoderInvalid() const { return IsStatusFlagSet(RobotStatusFlag::ENCODER_LIFT_INVALID); }
-
 protected:
   bool _toldToShutdown = false;
   ShutdownReason _shutdownReason = ShutdownReason::SHUTDOWN_UNKNOWN;
@@ -606,7 +580,7 @@ protected:
   // The robot's identifier
   RobotID_t _ID;
   u32       _serialNumberHead = 0;
-  
+
   // Whether or not sync was acknowledged by physical robot
   bool _syncRobotAcked = false;
 
@@ -654,6 +628,7 @@ protected:
   bool               _isPickedUp                = false;
   EngineTimeStamp_t  _timeLastPoked             = 0;
   bool               _isBeingHeld               = false;
+  EngineTimeStamp_t  _timeHeldStateChanged_ms   = 0;
   bool               _isCliffReactionDisabled   = false;
   bool               _gotStateMsgAfterRobotSync = false;
   u32                _lastStatusFlags           = 0;
@@ -713,13 +688,16 @@ protected:
   void DevReplaceAIComponent(AIComponent* aiComponent, bool shouldManage = false);
 
   // Performs various startup checks and displays fault codes as appropriate
+
   // Returns true if the check is complete, false if the check is still running
   // If return true, then res will be set appropriately
   bool UpdateStartupChecks(Result& res);
   bool UpdateCameraStartupChecks(Result& res);
   bool UpdateGyroCalibChecks(Result& res);
+  bool UpdateToFStartupChecks(Result& res);
 
   bool IsStatusFlagSet(RobotStatusFlag flag) const { return _lastStatusFlags & static_cast<u32>(flag); }
+
 }; // class Robot
 
 
@@ -778,4 +756,4 @@ inline bool Robot::IsLocalized() const {
 } // namespace Vector
 } // namespace Anki
 
-#endif // ANKI_COZMO_BASESTATION_ROBOT_H
+#endif // ANKI_VECTOR_BASESTATION_ROBOT_H

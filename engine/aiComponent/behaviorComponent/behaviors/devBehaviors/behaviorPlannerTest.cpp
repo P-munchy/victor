@@ -53,7 +53,7 @@ BehaviorPlannerTest::BehaviorPlannerTest(const Json::Value& config)
 void BehaviorPlannerTest::GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const
 {
   modifiers.behaviorAlwaysDelegates = false;
-  modifiers.visionModesForActiveScope->insert( {VisionMode::DetectingMarkers, EVisionUpdateFrequency::High} );
+  modifiers.visionModesForActiveScope->insert( {VisionMode::Markers, EVisionUpdateFrequency::High} );
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -104,7 +104,7 @@ void BehaviorPlannerTest::BehaviorUpdate()
 bool BehaviorPlannerTest::FindPoseFromCube()
 {
   BlockWorldFilter filter;
-  filter.SetAllowedFamilies( {ObjectFamily::LightCube} );
+  filter.SetFilterFcn(&BlockWorldFilter::IsLightCubeFilter);
   
   std::vector<const ObservableObject*> objects;
   GetBEI().GetBlockWorld().FindLocatedMatchingObjects( filter, objects );

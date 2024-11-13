@@ -88,5 +88,5 @@ namespace Vector {
     robot->SendRobotMessage<RobotInterface::SetFaceSaturation>(saturation);
   }
 
-} // Cozmo namespace
+} // Vector namespace
 } // Anki namespace

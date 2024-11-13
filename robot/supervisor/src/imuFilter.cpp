@@ -22,7 +22,6 @@
 #include "wheelController.h"
 #include "pathFollower.h"
 #include "pickAndPlaceController.h"
-#include "powerModeManager.h"
 #include "proxSensors.h"
 #include "messages.h"
 
@@ -394,10 +393,6 @@ namespace Anki {
         if (bracingEnabled_) {
           LiftController::Unbrace();
           HeadController::Unbrace();
-          const bool autoStarted = true;
-          const auto reason = MotorCalibrationReason::UnbraceAfterImpact;
-          LiftController::StartCalibrationRoutine(autoStarted, reason);
-          HeadController::StartCalibrationRoutine(autoStarted, reason);
         }
       }
 
@@ -596,12 +591,10 @@ namespace Anki {
               BraceForImpact();
             } else {
               // only clear the flag if aMag rises above the higher threshold.
-              fallStarted_ = (accelMagnitudeSqrd_ < FALLING_THRESH_HIGH_MMPS2_SQRD) &&
-                             (ProxSensors::IsAnyCliffDetected() || !PowerModeManager::IsActiveModeEnabled());
+              fallStarted_ = (accelMagnitudeSqrd_ < FALLING_THRESH_HIGH_MMPS2_SQRD) && ProxSensors::IsAnyCliffDetected();
             }
           } else { // not fallStarted
-            if ((accelMagnitudeSqrd_ < FALLING_THRESH_LOW_MMPS2_SQRD) &&
-                (ProxSensors::IsAnyCliffDetected() || !PowerModeManager::IsActiveModeEnabled())) {
+            if ((accelMagnitudeSqrd_ < FALLING_THRESH_LOW_MMPS2_SQRD) && ProxSensors::IsAnyCliffDetected()) {
               fallStarted_ = true;
               fallStartedTime_ = now;
             }
@@ -909,12 +902,12 @@ namespace Anki {
         const bool isMoving = WheelController::AreWheelsPowered() || WheelController::AreWheelsMoving() || HeadController::IsMoving();
         const f32 coeff = isMoving ? ROLL_FILT_COEFF_MOVING : ROLL_FILT_COEFF;
         roll_ = (coeff * gyroBasedRoll) + ((1.f - coeff) * accelBasedRoll);
-        AnkiDebugPeriodic(250, "IMUFilter.UpdateRoll",
-                         "Filtered, accel-based, gyro-based: %f %f %f, (In motion: %d)",
-                         RAD_TO_DEG_F32(roll_),
-                         RAD_TO_DEG_F32(accelBasedRoll),
-                         RAD_TO_DEG_F32(gyroBasedRoll),
-                         isMoving);
+//        AnkiDebugPeriodic(250, "IMUFilter.UpdateRoll",
+//                         "Filtered, accel-based, gyro-based: %f %f %f, (In motion: %d)",
+//                         RAD_TO_DEG_F32(roll_),
+//                         RAD_TO_DEG_F32(accelBasedRoll),
+//                         RAD_TO_DEG_F32(gyroBasedRoll),
+//                         isMoving);
       }
 
       Result Update()

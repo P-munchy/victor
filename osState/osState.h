@@ -94,16 +94,10 @@ public:
 // Public destructor
 ~OSState();
 
-#ifdef SIMULATOR
-  // Assign Webots supervisor
-  // Webots processes must do this before creating OSState for the first time.
-  // Unit test processes must call SetSupervisor(nullptr) to run without a supervisor.
-  static void SetSupervisor(webots::Supervisor *sup);
-#endif
-
   void Update(BaseStationTime_t currTime_nanosec);
 
   RobotID_t GetRobotID() const;
+  void SetRobotID(RobotID_t robotID);
 
   // Set how often state should be updated.
   // Affects how often the freq and temperature is updated.
@@ -213,6 +207,12 @@ public:
   // True if user space is secure
   bool IsUserSpaceSecure();
 
+  // True if this is a disclaimer bot for internal Anki Dev use
+  bool IsAnkiDevRobot();
+
+  // Reads CPU times data
+  void UpdateCPUTimeStats() const;
+  
 protected:
    // Return true if robot has a valid EMR.
    // This function is "off limits" to normal robot services
@@ -241,9 +241,6 @@ private:
   // Reads memory info data
   void UpdateMemoryInfo() const;
 
-  // Reads CPU times data
-  void UpdateCPUTimeStats() const;
-
   uint32_t kNominalCPUFreq_kHz = 800000;
 
   std::string _ipAddress       = "";
@@ -255,6 +252,7 @@ private:
   std::string _bootID          = "";
   bool        _isUserSpaceSecure = false;
   bool        _hasValidIPAddress = false;
+  bool        _isAnkiDevRobot = false;
 
   inline uint32_t GetPressure(uint32_t avail, uint32_t total) const
   {

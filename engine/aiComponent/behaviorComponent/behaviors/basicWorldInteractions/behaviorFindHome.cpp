@@ -18,7 +18,11 @@
 #include "engine/actions/driveToActions.h"
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/behaviorExternalInterface.h"
 #include "engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.h"
+#include "engine/aiComponent/behaviorComponent/behaviorContainer.h"
+#include "engine/components/visionScheduleMediator/visionScheduleMediator.h"
+#include "engine/components/visionComponent.h"
 #include "engine/blockWorld/blockWorld.h"
+#include "engine/blockWorld/blockWorldFilter.h"
 #include "engine/charger.h"
 #include "engine/components/carryingComponent.h"
 #include "engine/moodSystem/moodManager.h"
@@ -26,6 +30,7 @@
 #include "engine/navMap/memoryMap/memoryMapTypes.h"
 #include "engine/utils/robotPointSamplerHelper.h"
 #include "engine/vision/imageSaver.h"
+#include "engine/vision/visionProcessingResult.h"
 #include "util/cladHelpers/cladFromJSONHelpers.h"
 #include "util/console/consoleInterface.h"
 #include "util/logging/DAS.h"
@@ -37,17 +42,16 @@
 #include "clad/externalInterface/messageEngineToGame.h"
 
 #include "coretech/common/engine/jsonTools.h"
-#include "coretech/common/engine/math/polygon_impl.h"
+#include "coretech/common/engine/math/polygon.h"
 #include "coretech/common/engine/utils/timer.h"
 
+#define LOG_CHANNEL "Behaviors"
 
 namespace Anki {
 namespace Vector {
 
 namespace {
   const char* kSearchTurnAnimKey                 = "searchTurnAnimTrigger";
-  const char* kSearchTurnWaitingForImagesAnimKey = "searchTurnWaitingForImagesAnimTrigger";
-  const char* kSearchTurnEndAnimKey              = "searchTurnEndAnimTrigger";
   const char* kPostSearchAnimTrigger             = "postSearchAnimTrigger";
   const char* kMinSearchAngleSweepKey            = "minSearchAngleSweep_deg";
   const char* kMaxSearchTurnsKey                 = "maxSearchTurns";
@@ -56,18 +60,16 @@ namespace {
   const char* kNumSearchesBeforePlayingPostSearchAnim = "numSearchesBeforePlayingPostSearchAnim";
   const char* kMinDrivingDistKey                 = "minDrivingDist_mm";
   const char* kMaxDrivingDistKey                 = "maxDrivingDist_mm";
-  const char* kUseExposureCyclingKey             = "useExposureCycling";
-  const char* kNumImagesToWaitForKey             = "numImagesToWaitFor";
 
   const float kMinCliffPenaltyDist_mm = 100.0f;
   const float kMaxCliffPenaltyDist_mm = 600.0f;
   
-  // Enable for debug, to save images during WaitForImageAction
-  CONSOLE_VAR(bool, kFindHome_SaveImages, "Behaviors.FindHome", false);
-  
   // When generating new locations from which to search for the charger, new
   // locations should be at least this far from previously-searched locations.
   const float kMinDistFromPreviousSearch_mm = 200.f;
+
+  // Max allowed age of charger object to be considered recently seen
+  const RobotTimeStamp_t kMaxAgeForChargerSeenRecently_ms = 5000;
   
   constexpr MemoryMapTypes::FullContentArray kTypesToBlockSampling =
   {
@@ -81,6 +83,9 @@ namespace {
     {MemoryMapTypes::EContentType::InterestingEdge       , true },
     {MemoryMapTypes::EContentType::NotInterestingEdge    , true }
   };
+
+  const float kIncidenceForObservation_rad = DEG_TO_RAD(75.f);
+  const float kNumRandomPosesForObservation = 10;
 }
 
 
@@ -88,13 +93,9 @@ namespace {
 BehaviorFindHome::InstanceConfig::InstanceConfig(const Json::Value& config, const std::string& debugName)
 {
   searchTurnAnimTrigger = AnimationTrigger::Count;
-  searchTurnEndAnimTrigger = AnimationTrigger::Count;
-  waitForImagesAnimTrigger = AnimationTrigger::Count;
   postSearchAnimTrigger = AnimationTrigger::Count;
   
   JsonTools::GetCladEnumFromJSON(config, kSearchTurnAnimKey, searchTurnAnimTrigger, debugName);
-  JsonTools::GetCladEnumFromJSON(config, kSearchTurnWaitingForImagesAnimKey, waitForImagesAnimTrigger, debugName);
-  JsonTools::GetCladEnumFromJSON(config, kSearchTurnEndAnimKey, searchTurnEndAnimTrigger, debugName);
   JsonTools::GetCladEnumFromJSON(config, kPostSearchAnimTrigger, postSearchAnimTrigger, debugName);
   minSearchAngleSweep_deg = JsonTools::ParseFloat(config, kMinSearchAngleSweepKey, debugName);
   maxSearchTurns          = JsonTools::ParseUint8(config, kMaxSearchTurnsKey, debugName);
@@ -106,11 +107,8 @@ BehaviorFindHome::InstanceConfig::InstanceConfig(const Json::Value& config, cons
   homeFilter              = std::make_unique<BlockWorldFilter>();
   searchSpacePointEvaluator = std::make_unique<Util::RejectionSamplerHelper<Point2f>>();
   searchSpacePolyEvaluator  = std::make_unique<Util::RejectionSamplerHelper<Poly2f>>();
-  useExposureCycling      = JsonTools::ParseBool(config, kUseExposureCyclingKey, debugName);
-  numImagesToWaitFor      = JsonTools::ParseInt32(config, kNumImagesToWaitForKey, debugName);
   
   // Set up block world filter for finding charger object
-  homeFilter->AddAllowedFamily(ObjectFamily::Charger);
   homeFilter->AddAllowedType(ObjectType::Charger_Basic);
 }
 
@@ -120,9 +118,10 @@ BehaviorFindHome::BehaviorFindHome(const Json::Value& config)
 : ICozmoBehavior(config)
 , _iConfig(config, "Behavior" + GetDebugLabel() + ".LoadConfig")
 {
-  SubscribeToTags({
+  SubscribeToTags({{
     EngineToGameTag::RobotOffTreadsStateChanged,
-  });
+    EngineToGameTag::RobotProcessedImage,
+  }});
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -133,13 +132,8 @@ BehaviorFindHome::~BehaviorFindHome()
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorFindHome::GetBehaviorOperationModifiers(BehaviorOperationModifiers& modifiers) const
 {
-  modifiers.visionModesForActiveScope->insert({ VisionMode::DetectingMarkers,        EVisionUpdateFrequency::High });
-  modifiers.visionModesForActiveScope->insert({ VisionMode::FullWidthMarkerDetection,EVisionUpdateFrequency::High });
-  if(_iConfig.useExposureCycling)
-  {
-    modifiers.visionModesForActiveScope->insert({ VisionMode::CyclingExposure,         EVisionUpdateFrequency::High });
-    modifiers.visionModesForActiveScope->insert({ VisionMode::MeteringFromChargerOnly, EVisionUpdateFrequency::High });
-  }
+  modifiers.visionModesForActiveScope->insert({ VisionMode::Markers, EVisionUpdateFrequency::High });
+  
   modifiers.wantsToBeActivatedWhenOnCharger = false;
   modifiers.wantsToBeActivatedWhenCarryingObject = true;
 }
@@ -149,8 +143,6 @@ void BehaviorFindHome::GetBehaviorJsonKeys(std::set<const char*>& expectedKeys) 
 {
   const char* list[] = {
     kSearchTurnAnimKey,
-    kSearchTurnWaitingForImagesAnimKey,
-    kSearchTurnEndAnimKey,
     kPostSearchAnimTrigger,
     kMinSearchAngleSweepKey,
     kMaxSearchTurnsKey,
@@ -159,8 +151,6 @@ void BehaviorFindHome::GetBehaviorJsonKeys(std::set<const char*>& expectedKeys) 
     kNumSearchesBeforePlayingPostSearchAnim,
     kMinDrivingDistKey,
     kMaxDrivingDistKey,
-    kUseExposureCyclingKey,
-    kNumImagesToWaitForKey,
   };
   expectedKeys.insert( std::begin(list), std::end(list) );
 } 
@@ -194,8 +184,18 @@ void BehaviorFindHome::InitBehavior()
   _iConfig.condHandleCollisions = _iConfig.searchSpacePolyEvaluator->AddCondition(
     std::make_shared<RejectIfCollidesWithMemoryMap>(kTypesToBlockSampling)
   );
+
+  _iConfig.observeChargerBehavior = GetBEI().GetBehaviorContainer().FindBehaviorByID(BEHAVIOR_ID(RobustChargerObservation));
+  DEV_ASSERT(_iConfig.observeChargerBehavior != nullptr, "BehaviorFindHome.InitBehavior.NullObserveChargerBehavior");
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+void BehaviorFindHome::GetAllDelegates(std::set<IBehavior*>& delegates) const
+{
+  if( _iConfig.observeChargerBehavior ) {
+    delegates.insert( _iConfig.observeChargerBehavior.get() );
+  }
+}
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorFindHome::AlwaysHandleInScope(const EngineToGameEvent& event)
@@ -208,8 +208,21 @@ void BehaviorFindHome::AlwaysHandleInScope(const EngineToGameEvent& event)
         // If we've gotten off of our treads, our "visited locations" will no longer be valid
         _dVars.persistent.searchedLocations.clear();
       }
+      break;
     }
-    break;
+    case EngineToGameTag::RobotProcessedImage:
+    {
+      // NOTE: This should be removed as per VIC-13815
+      // It is a duplicated set of stats that are tracked for the purpose of
+      //  analytics for robot's charger finding capability
+      if(IsActivated() && GetBEI().HasVisionComponent()) {
+        _dVars.numFramesOfMarkers++;
+        if(GetBEI().GetVisionComponent().GetLastImageQuality() == Vision::ImageQuality::TooDark) {
+          _dVars.numFramesOfImageTooDark++;
+        }
+      }
+      break;
+    }
     default:
       break;
   }
@@ -233,22 +246,31 @@ void BehaviorFindHome::OnBehaviorActivated()
     DelegateIfInControl(new PlaceObjectOnGroundAction(),
                         &BehaviorFindHome::TransitionToStartSearch);
   } else {
-    TransitionToHeadStraight();
+    TransitionToStartSearch();
   }
 }
 
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-void BehaviorFindHome::TransitionToHeadStraight()
+void BehaviorFindHome::OnBehaviorDeactivated()
 {
-  // Move head to look straight ahead in case charger is right in
-  // front of us.
-  DelegateIfInControl(new MoveHeadToAngleAction(0.f),
-                      [this]() {
-                        TransitionToStartSearch();
-                      });
-}
+  const auto& robotPose = GetBEI().GetRobotInfo().GetPose();
+  const ObservableObject* charger = GetBEI().GetBlockWorld().FindLocatedObjectClosestTo(robotPose, *_iConfig.homeFilter);
 
+  // NOTE: The charger is considered not seen, if it was deleted from Blockworld (i.e. the charger object is null).
+  // This can happen under certain situations when getting a "negative-observation" (not seeing it when it was expected).
+  bool chargerSeen = false;
+  if(charger != nullptr) {
+    RobotTimeStamp_t chrgObsTime = charger->GetLastObservedTime();
+    RobotTimeStamp_t now = GetBEI().GetRobotInfo().GetLastMsgTimestamp();
+    chargerSeen = (now-chrgObsTime) < kMaxAgeForChargerSeenRecently_ms;
+  }
+
+  DASMSG(find_home_result, "find_home.result", "Whether the FindHome behavior succeeded in locating the object");
+  DASMSG_SET(i1, chargerSeen, "Success/failure on locating the charger. 1=success 0=failuire");
+  DASMSG_SET(i2, _dVars.numFramesOfMarkers, "Count of total number of processed image frames searching for Markers");
+  DASMSG_SET(i3, _dVars.numFramesOfImageTooDark, "Count of number of processed image frames (searching for Markers) that are TooDark");
+  DASMSG_SEND();
+}
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 void BehaviorFindHome::TransitionToStartSearch()
@@ -259,11 +281,21 @@ void BehaviorFindHome::TransitionToStartSearch()
   _iConfig.condHandleNearPrevSearch->SetOtherPositions(GetRecentlySearchedLocations());
   const bool nearPreviousSearch = !_iConfig.condHandleNearPrevSearch->operator()(robotPosition);
   if (nearPreviousSearch) {
-    PRINT_CH_INFO("Behaviors", "BehaviorFindHome.TransitionToStartSearch.TooCloseToPreviousSearch",
-                  "We are too close to a previously-searched location, so driving to a new search pose");
+    LOG_INFO("BehaviorFindHome.TransitionToStartSearch.TooCloseToPreviousSearch",
+             "We are too close to a previously-searched location, so driving to a new search pose");
     TransitionToRandomDrive();
   } else {
-    TransitionToSearchTurn();
+    TransitionToLookInPlace();
+  }
+}
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+void BehaviorFindHome::TransitionToLookInPlace()
+{
+  if(ANKI_VERIFY(_iConfig.observeChargerBehavior->WantsToBeActivated(), 
+                 "BehaviorFindHome.TransitionToLookInPlace.ObserveChargerBehavior.NotActivatable", "" )) {
+    DelegateIfInControl(_iConfig.observeChargerBehavior.get(), &BehaviorFindHome::TransitionToSearchTurn);
   }
 }
 
@@ -277,12 +309,12 @@ void BehaviorFindHome::TransitionToSearchTurn()
   const bool exceededMaxTurns = (_dVars.numTurnsCompleted >= _iConfig.maxSearchTurns);
   
   if (sweptEnough || exceededMaxTurns) {
-    PRINT_CH_INFO("Behaviors", "BehaviorFindHome.TransitionToSearchTurn.CompletedSearch",
-                  "We have completed a full search. Played %d turn animations (max is %d), and swept an angle of %.2f deg (min required sweep angle %.2f deg)",
-                  _dVars.numTurnsCompleted,
-                  _iConfig.maxSearchTurns,
-                  _dVars.angleSwept_deg,
-                  _iConfig.minSearchAngleSweep_deg);
+    LOG_INFO("BehaviorFindHome.TransitionToSearchTurn.CompletedSearch",
+             "We have completed a full search. Played %d turn animations (max is %d), and swept an angle of %.2f deg (min required sweep angle %.2f deg)",
+             _dVars.numTurnsCompleted,
+             _iConfig.maxSearchTurns,
+             _dVars.angleSwept_deg,
+             _iConfig.minSearchAngleSweep_deg);
     ++_dVars.numSearchesCompleted;
     // Record this as a 'searched' location
     const float now_sec = BaseStationTimer::getInstance()->GetCurrentTimeInSeconds();
@@ -300,38 +332,8 @@ void BehaviorFindHome::TransitionToSearchTurn()
       TransitionToRandomDrive();
     }
   } else {
-    // In high stimulation, just play the search turn animations, but not the
-    // "waiting for images" or "search turn end" animations
-    const auto currMood = GetBEI().GetMoodManager().GetSimpleMood();
-    const bool isHighStim = (currMood == SimpleMoodType::HighStim);
-
-    auto* action = new CompoundActionSequential();
-    
-    // Always do the "search turn"
-    action->AddAction(new TriggerAnimationAction(_iConfig.searchTurnAnimTrigger));
-    
-    WaitForImagesAction* waitForImagesAction = new WaitForImagesAction(_iConfig.numImagesToWaitFor,
-                                                                       VisionMode::DetectingMarkers);
-    if(kFindHome_SaveImages)
-    {
-      const std::string path = GetBEI().GetRobotInfo().GetDataPlatform()->pathToResource(Util::Data::Scope::Cache,
-                                                                                         "findHomeImages");
-      ImageSaverParams params(path,
-                              ImageSaverParams::Mode::Stream,
-                              -1);  // Quality: save PNGs
-      
-      waitForImagesAction->SetSaveParams(params);
-    }
-    
-    if (isHighStim) {
-      action->AddAction(waitForImagesAction);
-    } else {
-      // In non-high-stim, play a "waiting for images" animation in parallel with the wait for
-      // images action, and play a "search turn end" animation after the "wait for images" anim.
-      action->AddAction(new LoopAnimWhileAction(waitForImagesAction,
-                                                _iConfig.waitForImagesAnimTrigger));
-      action->AddAction(new TriggerAnimationAction(_iConfig.searchTurnEndAnimTrigger));
-    }
+    // Queue the "search turn" animation
+    auto* action = new TriggerAnimationAction(_iConfig.searchTurnAnimTrigger);
     
     // Keep track of the pose before the robot starts turning
     const auto& robotPose = GetBEI().GetRobotInfo().GetPose();
@@ -351,7 +353,7 @@ void BehaviorFindHome::TransitionToSearchTurn()
                             DASMSG_SEND_WARNING();
                           }
                           _dVars.angleSwept_deg += std::abs(angleSwept_deg);
-                          TransitionToSearchTurn();
+                          TransitionToLookInPlace();
                         });
   }
 }
@@ -370,7 +372,7 @@ void BehaviorFindHome::TransitionToRandomDrive()
   // if that's the case we don't want to just keep searching endlessly, so we need a persistent stopping condition.
   const auto& recentlySearchedLocations = GetRecentlySearchedLocations();
   if (recentlySearchedLocations.size() >= _iConfig.maxNumRecentSearches) {
-    PRINT_NAMED_WARNING("BehaviorFindHome.TransitionToRandomDrive.TooManyRecentSearches",
+    LOG_WARNING("BehaviorFindHome.TransitionToRandomDrive.TooManyRecentSearches",
                         "We have performed too many (%zu) searches in the past %.1f seconds - ending behavior",
                         recentlySearchedLocations.size(), _iConfig.recentSearchWindow_sec);
     // Clear our recent searches so we can start fresh next time
@@ -385,7 +387,7 @@ void BehaviorFindHome::TransitionToRandomDrive()
   const Radians angleTol = M_PI_F;    // basically don't care about the angle of arrival
   auto driveToAction = new DriveToPoseAction(potentialSearchPoses);
   driveToAction->SetGoalThresholds(DEFAULT_POSE_EQUAL_DIST_THRESOLD_MM, angleTol);
-  DelegateIfInControl(driveToAction, &BehaviorFindHome::TransitionToSearchTurn);
+  DelegateIfInControl(driveToAction, &BehaviorFindHome::TransitionToLookInPlace);
 }
 
 
@@ -404,7 +406,9 @@ void BehaviorFindHome::GenerateSearchPoses(std::vector<Pose3d>& outPoses)
   const auto* charger = dynamic_cast<const Charger*>(GetBEI().GetBlockWorld().FindLocatedObjectClosestTo(robotPose, *_iConfig.homeFilter));
   if ((charger != nullptr) &&
       (now_sec > _dVars.persistent.lastVisitedOldChargerTime + _iConfig.recentSearchWindow_sec)) {
-    outPoses = charger->GenerateObservationPoses(GetRNG());
+    outPoses = charger->GenerateObservationPoses( GetRNG(),
+                                                  kNumRandomPosesForObservation,
+                                                  kIncidenceForObservation_rad);
     _dVars.persistent.lastVisitedOldChargerTime = now_sec;
     return;
   }
@@ -474,14 +478,14 @@ void BehaviorFindHome::GenerateSearchPoses(std::vector<Pose3d>& outPoses)
     }
     
     if( numAcceptedPoses >= kNumPositionsForSearch ) {
-      PRINT_CH_INFO("Behaviors", "BehaviorFindHome.GenerateSearchPoses.Completed",
-                    "Met required sampling of %d points, cnt=%d", numAcceptedPoses, cnt);
+      LOG_INFO("BehaviorFindHome.GenerateSearchPoses.Completed",
+               "Met required sampling of %d points, cnt=%d", numAcceptedPoses, cnt);
       break;
     }
   }
 
   if (outPoses.empty()) {
-    PRINT_NAMED_WARNING("BehaviorFindHome.GenerateSearchPoses.NoPosesFound",
+    LOG_WARNING("BehaviorFindHome.GenerateSearchPoses.NoPosesFound",
                         "No poses that satisfy the sampling requirements were found - using naive random sampling method.");
     outPoses.emplace_back();
     GetRandomDrivingPose(outPoses.back());

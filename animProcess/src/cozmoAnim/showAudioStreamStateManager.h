@@ -20,7 +20,9 @@
 namespace Anki {
 namespace Vector {
 
-class AnimationStreamer;
+namespace Anim {
+  class AnimationStreamer;
+}
 enum class AlexaUXState : uint8_t;
 
 namespace Audio {
@@ -30,12 +32,12 @@ class EngineRobotAudioInput;
 class ShowAudioStreamStateManager{
 public:
 
-  ShowAudioStreamStateManager(const AnimContext* context);
+  ShowAudioStreamStateManager(const Anim::AnimContext* context);
   virtual ~ShowAudioStreamStateManager();
 
   void Update();
   
-  void SetAnimationStreamer(AnimationStreamer* streamer)
+  void SetAnimationStreamer(Anim::AnimationStreamer* streamer)
   {
     _streamer = streamer;
   }
@@ -70,6 +72,9 @@ public:
   bool HasAnyAlexaResponse() const; // ok to call off thread
   bool HasValidAlexaUXResponse(AlexaUXState state) const;
   bool StartAlexaResponse(AlexaUXState state, bool ignoreGetIn = false);
+  
+  void SetOnCharger(bool onCharger) { _onCharger = onCharger; }
+  void SetFrozenOnCharger(bool frozenOnCharger) { _frozenOnCharger = frozenOnCharger; }
 
 private:
 
@@ -77,8 +82,8 @@ private:
   void StartTriggerResponseWithoutGetIn(OnTriggerAudioCompleteCallback = {});
 
 
-  const AnimContext* _context = nullptr;
-  AnimationStreamer* _streamer = nullptr;
+  const Anim::AnimContext* _context = nullptr;
+  Anim::AnimationStreamer* _streamer = nullptr;
 
   Anki::AudioEngine::Multiplexer::PostAudioEvent _postAudioEvent;
   int32_t _minStreamingDuration_ms;
@@ -86,6 +91,9 @@ private:
   bool _shouldTriggerWordSimulateStream;
   uint8_t _getInAnimationTag;
   std::string _getInAnimName;
+  
+  bool _frozenOnCharger = false;
+  bool _onCharger = false;
 
   // Trigger word responses are triggered via callbacks from the trigger word detector thread
   // so we need to be thread safe and have pending responses to be executed on the main thread in Update

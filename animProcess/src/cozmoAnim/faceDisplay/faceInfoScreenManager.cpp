@@ -28,11 +28,10 @@
 
 #include "micDataTypes.h"
 
-#include "coretech/common/engine/array2d_impl.h"
+#include "coretech/common/shared/array2d.h"
 #include "coretech/common/engine/utils/data/dataPlatform.h"
 #include "coretech/common/engine/utils/timer.h"
 #include "coretech/vision/engine/image.h"
-#include "coretech/vision/engine/image_impl.h"
 #include "util/console/consoleInterface.h"
 #include "util/console/consoleSystem.h"
 #include "util/fileUtils/fileUtils.h"
@@ -119,6 +118,9 @@ namespace {
   const u32 kIPCheckPeriod_sec = 20;
   
   const f32 kAlexaTimeout_s = 5.0f;
+
+  const char* kAlexaIconSpriteName = "face_alexa_icon";
+
   // TODO (VIC-11606): don't use timeout for mute
   CONSOLE_VAR_RANGED(f32, kToggleMuteTimeout_s, "FaceInfoScreenManager", 1.2f, 0.001f, 3.0f);
   CONSOLE_VAR_RANGED(f32, kAlexaNotificationTimeout_s, "FaceInfoScreenManager", 2.0f, 0.001f, 3.0f);
@@ -146,13 +148,12 @@ FaceInfoScreenManager::FaceInfoScreenManager()
   _scratchDrawingImg->Allocate(FACE_DISPLAY_HEIGHT, FACE_DISPLAY_WIDTH);
 
   _calmModeMsgOnNone.enable = false;
-  _calmModeMsgOnNone.calibOnDisable = false;
 
   memset(&_customText, 0, sizeof(_customText));
 }
 
 
-void FaceInfoScreenManager::Init(AnimContext* context, AnimationStreamer* animStreamer)
+void FaceInfoScreenManager::Init(Anim::AnimContext* context, Anim::AnimationStreamer* animStreamer)
 {
   DEV_ASSERT(context != nullptr, "FaceInfoScreenManager.Init.NullContext");
 
@@ -230,8 +231,19 @@ void FaceInfoScreenManager::Init(AnimContext* context, AnimationStreamer* animSt
   }
 
   ADD_SCREEN(MicDirectionClock, Camera);
-  ADD_SCREEN(Camera, Main);    // Last screen cycles back to Main
   ADD_SCREEN(CameraMotorTest, Camera);
+  
+  if(IsWhiskey())
+  {
+    ADD_SCREEN(Camera, ToF);
+    ADD_SCREEN(ToF, Main);    // Last screen cycles back to Main
+  }
+  else
+  {
+    ADD_SCREEN(Camera, Kercre123);
+  }
+
+  ADD_SCREEN_WITH_TEXT(Kercre123, Main, {"BRANCH: snowboy?"});
 
 
   // ========== Screen Customization ========= 
@@ -250,7 +262,6 @@ void FaceInfoScreenManager::Init(AnimContext* context, AnimationStreamer* animSt
     // Disable calm mode
     RobotInterface::CalmPowerMode msg;
     msg.enable = false;
-    msg.calibOnDisable = false;
     SendAnimToRobot(std::move(msg));
   };
   SET_ENTER_ACTION(None, noneEnterFcn);
@@ -289,7 +300,7 @@ void FaceInfoScreenManager::Init(AnimContext* context, AnimationStreamer* animSt
 
   ADD_MENU_ITEM(Main, "EXIT", None);
 #if ENABLE_SELF_TEST
-  ADD_MENU_ITEM(Main, "RUN SELF TEST", SelfTest);
+  ADD_MENU_ITEM(Main, "SELF TEST", SelfTest);
 #endif
   ADD_MENU_ITEM(Main, "CLEAR USER DATA", ClearUserData);
 
@@ -410,6 +421,25 @@ void FaceInfoScreenManager::Init(AnimContext* context, AnimationStreamer* animSt
   };
   SET_ENTER_ACTION(CameraMotorTest, cameraEnterAction);
   SET_EXIT_ACTION(CameraMotorTest, cameraMotorTestExitAction);
+
+  if(IsWhiskey())
+  {
+    // ToF screen 
+    FaceInfoScreen::ScreenAction enterToFScreen = []() {
+                                                    RobotInterface::SendRangeData msg;
+                                                    msg.enable = true;
+                                                    RobotInterface::SendAnimToEngine(std::move(msg));
+                                                  };
+    SET_ENTER_ACTION(ToF, enterToFScreen);
+
+    // ToF screen 
+    FaceInfoScreen::ScreenAction exitToFScreen = []() {
+                                                   RobotInterface::SendRangeData msg;
+                                                   msg.enable = false;
+                                                   RobotInterface::SendAnimToEngine(std::move(msg));
+                                                 };
+    SET_EXIT_ACTION(ToF, exitToFScreen);
+  }
 
   
   // Check if we booted in recovery mode
@@ -986,7 +1016,7 @@ void FaceInfoScreenManager::ProcessMenuNavigation(const RobotState& state)
 
   const ScreenName currScreenName = GetCurrScreenName();
 
-  if (singlePressDetected) {
+  if (singlePressDetected && _engineLoaded) {
     if (IsAlexaScreen(currScreenName)) {
       // Single press should exit any uncompleted alexa authorization
       Alexa* alexa = _context->GetAlexa();
@@ -1047,12 +1077,11 @@ void FaceInfoScreenManager::ProcessMenuNavigation(const RobotState& state)
     // NOTE: Due to lack of quadrature encoding on the wheels
     //       when they are not actively powered the reported speed
     //       of the wheels when moved manually have a fixed sign.
-    //       Left wheel is always -ve and right wheel is always +ve.
     //       Consequently, moving the left wheel in any direction
     //       moves the menu cursor down and moving the right wheel
     //       in any direction moves it up.
-    const auto lWheelSpeed = state.lwheel_speed_mmps;
-    const auto rWheelSpeed = state.rwheel_speed_mmps;
+    const auto lWheelSpeed = std::fabsf(state.lwheel_speed_mmps);
+    const auto rWheelSpeed = std::fabsf(state.rwheel_speed_mmps);
     if (rWheelSpeed > kWheelMotionThresh_mmps) {
 
       ++_wheelMovingForwardsCount;
@@ -1064,7 +1093,7 @@ void FaceInfoScreenManager::ProcessMenuNavigation(const RobotState& state)
         DrawScratch();
       }
 
-    } else if (lWheelSpeed < -kWheelMotionThresh_mmps) {
+    } else if (lWheelSpeed > kWheelMotionThresh_mmps) {
 
       ++_wheelMovingBackwardsCount;
       _wheelMovingForwardsCount = 0;
@@ -1107,6 +1136,13 @@ void FaceInfoScreenManager::ProcessMenuNavigation(const RobotState& state)
         LOG_INFO("FaceInfoScreenManager.ProcessMenuNavigation.ExitPairing", "Going to Customer Service Main from Pairing");
         RobotInterface::SendAnimToEngine(SwitchboardInterface::ExitPairing());
         SetScreen(ScreenName::Main);
+
+        // DAS msg for entering customer care screen
+        // Note: The debug info screens will only be reported unlocked here if they 
+        //       were unlocked the previous time the customer care screen was entered.
+        DASMSG(robot_cc_screen_enter, "robot.cc_screen_enter", "Entered customer care screen");
+        DASMSG_SET(i1, _debugInfoScreensUnlocked ? 1 : 0, "Debug info screens unlocked");
+        DASMSG_SEND();
       }
     }
   }
@@ -1237,11 +1273,17 @@ void FaceInfoScreenManager::DrawMain()
     esn =  serialNum;
   }
 
+  std::transform(esn.begin(), esn.end(), esn.begin(),
+    [](unsigned char c){ return std::tolower(c); });
+
   const std::string serialNo = "ESN: "  + esn;
+
+  const std::string hwVer    = "HW: "   + std::to_string(Factory::GetEMR()->fields.HW_VER);
 
   const std::string osVer    = "OS: "   + osstate->GetOSBuildVersion() +
                                           (FACTORY_TEST ? " (V4)" : "") +
                                           (osstate->IsInRecoveryMode() ? " U" : "");
+
   const std::string ssid     = "SSID: " + osstate->GetSSID(true);
 
 #if ANKI_DEV_CHEATS
@@ -1253,7 +1295,9 @@ void FaceInfoScreenManager::DrawMain()
     ip = "XXX.XXX.XXX.XXX";
   }
 
-  ColoredTextLines lines = { {serialNo}, 
+  // ESN/serialNo and the HW version are drawn on the same line with serialNo default left aligned and
+  // HW version right aligned.
+  ColoredTextLines lines = { { {serialNo}, {hwVer, NamedColors::WHITE, false} },
                              {osVer}, 
                              {ssid}, 
 #if FACTORY_TEST
@@ -1314,7 +1358,6 @@ void FaceInfoScreenManager::DrawNetwork()
                             // TODO: re-enable after security team has confirmed showing email is allowed
                             //  { {"EMAIL: "}, {"dummy...@a...com"} },
                              { {"IP: "}, {ip, (osstate->IsValidIPAddress(ip) ? NamedColors::GREEN : NamedColors::RED)} },
-                             { },
                              { {currTime} },
                              { {"NETWORK: "}, _testingNetwork ? ColoredText("") : getStatusString(_networkStatus) }
                            };
@@ -1340,29 +1383,42 @@ void FaceInfoScreenManager::DrawSensorInfo(const RobotState& state)
   const std::string cliffs = temp;
 
 
-  sprintf(temp,
-          "DIST:   %3umm",
-          state.proxData.distance_mm);
-  const std::string prox1 = temp;
+  std::string prox1, prox2;
+  if(!IsWhiskey())
+  {
+    sprintf(temp,
+            "DIST:   %3umm",
+            state.proxData.distance_mm);
+    prox1 = temp;
 
-  sprintf(temp,
-          "        (%2.1f %2.1f %3.f)",
-          state.proxData.signalIntensity,
-          state.proxData.ambientIntensity,
-          state.proxData.spadCount);
-  const std::string prox2 = temp;
-
+    sprintf(temp,
+            "        (%2.1f %2.1f %3.f)",
+            state.proxData.signalIntensity,
+            state.proxData.ambientIntensity,
+            state.proxData.spadCount);
+    prox2 = temp;
+  }
 
   sprintf(temp,
           "TOUCH: %u",
           state.backpackTouchSensorRaw);
   const std::string touch = temp;
 
-  const bool batteryDisconnected = static_cast<bool>(state.status & (uint32_t)RobotStatusFlag::IS_BATTERY_DISCONNECTED);
+  #define IS_STATUS_FLAG_SET(x) ((state.status & (uint32_t)RobotStatusFlag::x) != 0)
+  const bool batteryDisconnected = IS_STATUS_FLAG_SET(IS_BATTERY_DISCONNECTED);
+  const bool batteryCharging     = IS_STATUS_FLAG_SET(IS_CHARGING);
+  const bool batteryHot          = IS_STATUS_FLAG_SET(IS_BATTERY_OVERHEATED);
+  const bool batteryLow          = IS_STATUS_FLAG_SET(IS_BATTERY_LOW);
+  const bool shutdownImminent    = IS_STATUS_FLAG_SET(IS_SHUTDOWN_IMMINENT);
+
   sprintf(temp,
-          "BATT:  %0.2fV   %s",
+          "BATT:  %0.2fV   %s%s%s%s%s",
           state.batteryVoltage,
-          batteryDisconnected ? "D" : "");
+          batteryDisconnected ? "D" : " ",
+          batteryCharging     ? "C" : " ",
+          batteryHot          ? "H" : " ",
+          batteryLow          ? "L" : " ",
+          shutdownImminent    ? "S" : " ");
   const std::string batt = temp;
 
   sprintf(temp,
@@ -1376,7 +1432,22 @@ void FaceInfoScreenManager::DrawSensorInfo(const RobotState& state)
           state.battTemp_C);
   const std::string tempC = temp;
 
-  DrawTextOnScreen({syscon, cliffs, prox1, prox2, touch, batt, charger, tempC});
+  if(IsWhiskey())
+  {
+    DrawTextOnScreen({cliffs, touch, batt, charger, tempC});
+  }
+  else if (IsXray())
+  {
+    sprintf(temp,
+            "DIST: %3umm (%2.1f %2.1f %3.f)",
+            state.proxData.distance_mm,
+            state.proxData.signalIntensity,
+            state.proxData.ambientIntensity,
+            state.proxData.spadCount);
+    DrawTextOnScreen({syscon, cliffs, temp, touch, batt, charger, tempC});
+  } else {
+    DrawTextOnScreen({syscon, cliffs, prox1, prox2, touch, batt, charger, tempC});
+  }
 }
 
 void FaceInfoScreenManager::DrawIMUInfo(const RobotState& state)
@@ -1435,6 +1506,8 @@ void FaceInfoScreenManager::DrawMicInfo(const RobotInterface::MicData& micData)
     return;
   }
 
+  //Get the intensity of the first sample in each channel and print them to a debug string.
+  //(Should we instead use the max intensity of the first n samples per channel?)
   char temp[32] = "";
   sprintf(temp,
           "%d",
@@ -1443,17 +1516,17 @@ void FaceInfoScreenManager::DrawMicInfo(const RobotInterface::MicData& micData)
 
   sprintf(temp,
           "%d",
-          micData.data[1]);
+          micData.data[MicData::kSamplesPerBlockPerChannel]);
   const std::string micData1 = temp;
 
   sprintf(temp,
           "%d",
-          micData.data[2]);
+          micData.data[MicData::kSamplesPerBlockPerChannel*2]);
   const std::string micData2 = temp;
 
   sprintf(temp,
           "%d",
-          micData.data[3]);
+          micData.data[MicData::kSamplesPerBlockPerChannel*3]);
   const std::string micData3 = temp;
 
   DrawTextOnScreen({"MICS", micData0, micData1, micData2, micData3});
@@ -1491,15 +1564,15 @@ void FaceInfoScreenManager::DrawAlexaFace()
 
   static const int        kScreenTop            = 0;
   static const int        kIconToTextSpacing    = 0;
-  static const float      kDefaultTextScale     = 0.4f;
   static const ColorRGBA& kTextColor            = NamedColors::WHITE;
   static const int        kTextSpacing          = 14;
   static const int        kTextLineThickness    = 1;
+  float      kDefaultTextScale     = IsXray() ? 0.3f : 0.4f;
 
   // draw the alexa icon ...
 
   Vision::ImageRGBA alexaIcon;
-  alexaIcon.Load( _context->GetDataLoader()->GetSpritePaths()->GetValue( Vision::SpriteName::Face_Alexa_Icon ) );
+  alexaIcon.Load(_context->GetDataLoader()->GetSpritePaths()->GetAssetPath(kAlexaIconSpriteName));
 
   const int kIconTop  = kScreenTop;
   const int iconLeft  = ( FACE_DISPLAY_WIDTH - alexaIcon.GetNumCols() )  / 2.0f;
@@ -1533,16 +1606,21 @@ void FaceInfoScreenManager::DrawAlexaFace()
     {
       textVec.push_back( { "You're ready to use Alexa." } );
       textVec.push_back( { "Check out the Alexa App" } );
-      textVec.push_back( { "for things to try." } );
-
+      if (!IsXray()) {
+        textVec.push_back( { "for things to try." } );
+      }
       break;
     }
 
     case ScreenName::AlexaPairingExpired:
     {
       textVec.push_back( { "The code has expired." } );
-      textVec.push_back( { "Retry to generate" } );
-      textVec.push_back( { "a new code." } );
+      if (IsXray()) {
+        textVec.push_back( { "Try again" } );
+      } else {
+        textVec.push_back( { "Retry to generate" } );
+        textVec.push_back( { "a new code." } );
+      }
 
       break;
     }
@@ -1597,10 +1675,8 @@ void FaceInfoScreenManager::DrawMuteAnimation()
   // so play the on/off or off/on anim to reflect that
   const std::string animName = muted ? "anim_micstate_micoff_01" : "anim_micstate_micon_01";
   const bool shouldInterrupt = true;
-  const bool shouldOverrideEyeHue = true;
-  const bool shouldRenderInEyeHue = false;
-  _animationStreamer->SetStreamingAnimation(animName, 0, 1, shouldInterrupt,
-                                            shouldOverrideEyeHue, shouldRenderInEyeHue);
+  const bool overrideAllSpritesToEyeColor = true;
+  _animationStreamer->SetStreamingAnimation(animName, 0, 1, 0, shouldInterrupt, overrideAllSpritesToEyeColor);
   
 }
   
@@ -1612,20 +1688,17 @@ void FaceInfoScreenManager::DrawAlexaNotification()
 
   const std::string animName = "anim_avs_notification_loop_01";
   const bool shouldInterrupt = true;
-  const bool shouldOverrideEyeHue = true;
-  const bool shouldRenderInEyeHue = false;
-  _animationStreamer->SetStreamingAnimation(animName, 0, 1, 0, shouldInterrupt,
-                                            shouldOverrideEyeHue, shouldRenderInEyeHue);
+  _animationStreamer->SetStreamingAnimation(animName, 0, 1, 0, shouldInterrupt);
 }
 
 // Draws each element of the textVec on a separate line (spacing determined by textSpacing_pix)
 // in textColor with a background of bgColor.
 void FaceInfoScreenManager::DrawTextOnScreen(const std::vector<std::string>& textVec,
-                                    const ColorRGBA& textColor,
-                                    const ColorRGBA& bgColor,
-                                    const Point2f& loc,
-                                    u32 textSpacing_pix,
-                                    f32 textScale)
+                                             const ColorRGBA& textColor,
+                                             const ColorRGBA& bgColor,
+                                             const Point2f& loc,
+                                             u32 textSpacing_pix,
+                                             f32 textScale)
 {
   _scratchDrawingImg->FillWith( {bgColor.r(), bgColor.g(), bgColor.b()} );
 
@@ -1633,6 +1706,8 @@ void FaceInfoScreenManager::DrawTextOnScreen(const std::vector<std::string>& tex
   f32 textLocY = loc.y();
   // TODO: Expose line and location(?) as arguments
   const u8  textLineThickness = 8;
+
+  textScale = IsXray() ? textScale - 0.05f : textScale;
 
   for(const auto& text : textVec)
   {
@@ -1662,22 +1737,122 @@ void FaceInfoScreenManager::DrawTextOnScreen(const ColoredTextLines& lines,
   f32 textLocY = loc.y();
   for(const auto& line : lines)
   {
-    f32 textLocX = loc.x();
+    f32 textOffsetX = loc.x();
+    f32 textOffsetXRight = loc.x();
     for(const auto& coloredText : line)
     {
-      _scratchDrawingImg->DrawText(
-        {textLocX, textLocY},
-        coloredText.text.c_str(),
-        coloredText.color,
-        textScale,
-        textLineThickness);
+      f32 textLocX = textOffsetX;
+      
+      auto bbox = Vision::Image::GetTextSize(coloredText.text.c_str(), textScale, textLineThickness);
+      if(coloredText.leftAlign)
+      {
+        textOffsetX += bbox.x();
+      }
+      else
+      {
+        // Right align text, need to account for the width of the text as DrawText expects the bottom left corner
+        // location
+        textLocX = FACE_DISPLAY_WIDTH - bbox.x() - textOffsetXRight;
+        textOffsetXRight += bbox.x();
+      }
+      
+      _scratchDrawingImg->DrawText({textLocX, textLocY},
+                                   coloredText.text.c_str(),
+                                   coloredText.color,
+                                   textScale,
+                                   textLineThickness);
 
-      auto bbox = _scratchDrawingImg->GetTextSize(coloredText.text.c_str(), textScale, textLineThickness);
-      textLocX += bbox.x();
+
     }
     textLocY += textSpacing_pix;
   }
 
+  DrawScratch();
+}
+
+void FaceInfoScreenManager::DrawToF(const RangeDataDisplay& data)
+{
+  if(GetCurrScreenName() != ScreenName::ToF)
+  {
+    return;
+  }
+  
+  Vision::ImageRGB565& img = *_scratchDrawingImg;
+  const auto& clearColor = NamedColors::BLACK;
+  img.FillWith( {clearColor.r(), clearColor.g(), clearColor.b()} );
+
+  // Draw the range data in a 4x4 grid where each cell is one of the range ROIs
+  const u32 gridHeight = FACE_DISPLAY_HEIGHT / 4;
+  const u32 gridWidth = FACE_DISPLAY_WIDTH / 4;
+  for(const auto& rangeData : data.data)
+  {
+    int roi = rangeData.roi;
+    
+    const u32 x = (roi % 4) * gridWidth;
+    const u32 y = (roi / 4) * gridHeight;
+    const Rectangle<f32> rect(x, y, gridWidth-1, gridHeight-1); // -1 for 1 pixel borders
+
+    // Assuming max range is 1m
+    f32 temp = std::max(rangeData.processedRange_mm, 0.000001f); // Prevent divide by zero
+    temp = std::min(temp, 1000.f) / 1000.f;
+
+    // Scale color based on distance
+    u8 color = 255 * temp;
+
+    u8 status = rangeData.status;
+
+    // Signal quality is signalRate / spadCount
+    float tempDiv = (rangeData.spadCount == 0 ? -1 : rangeData.spadCount);
+    float signalQuality = (f32)(rangeData.signalRate_mcps / tempDiv);
+
+    // Default background color is green
+    // unless this ROI reported an invalid status in which the background
+    // is red
+    ColorRGBA bg(0, (u8)(255-color), 0);
+    if(status != 0)
+    {
+      bg = ColorRGBA((u8)255, (u8)0, (u8)0);
+      color = 255;
+    }
+
+    img.DrawFilledRect(rect, bg);
+
+    const float kTextScale = 0.3f;
+    const int kTextThickness = 1;
+    
+    // Draw three things in each cell, distance (top left), status (top right), and signal quality (bottom left)
+    Point2f loc(x, y + 8); // Draw text 8 pixels below top cell border
+    const u8 textColor = (color > 128 ? 255 : 0); // Make text color opposite of background for readability
+    img.DrawText(loc,
+                 std::to_string((u32)(rangeData.processedRange_mm)),
+                 {textColor, textColor, textColor},
+                 kTextScale,
+                 false,
+                 kTextThickness);
+
+    // Range status is drawn a fixed amount from range distance (close to top right corner of cell)
+    const f32 xPos = loc.x() + (u32)(2.75f*(f32)kDefaultTextSpacing_pix);
+    img.DrawText({xPos, loc.y()},
+                 std::to_string(status),
+                 {textColor, textColor, textColor},
+                 kTextScale,
+                 false,
+                 kTextThickness);
+
+    const int yOffset = Vision::Image::GetTextSize(std::to_string((u32)(rangeData.processedRange_mm)),
+                                                   kTextScale,
+                                                   kTextThickness).y();
+    const f32 yPos = loc.y() + yOffset + 1; // +1 for extra spacing between text lines
+    char t[8];
+    sprintf(t, "%2.1f", signalQuality);
+    img.DrawText({loc.x(), yPos},
+                 std::string(t),
+                 {textColor, textColor, textColor},
+                 kTextScale,
+                 false,
+                 kTextThickness);
+  }  
+  
   DrawScratch();
 }
 
@@ -1919,7 +2094,7 @@ bool FaceInfoScreenManager::ScreenNeedsWait(const ScreenName& screenName) const
   }
 }
 
-void FaceInfoScreenManager::SelfTestEnd(AnimationStreamer* animStreamer)
+void FaceInfoScreenManager::SelfTestEnd(Anim::AnimationStreamer* animStreamer)
 {
   const ScreenName curScreen = FaceInfoScreenManager::getInstance()->GetCurrScreenName();
   if(curScreen != ScreenName::SelfTestRunning)
@@ -1931,6 +2106,18 @@ void FaceInfoScreenManager::SelfTestEnd(AnimationStreamer* animStreamer)
   _context->GetBackpackLightComponent()->SetSelfTestRunning(false);
   
   SetScreen(ScreenName::Main);
+}
+  
+void FaceInfoScreenManager::ExitCCScreen(Anim::AnimationStreamer* animStreamer)
+{
+  const ScreenName curScreen = FaceInfoScreenManager::getInstance()->GetCurrScreenName();
+  if(curScreen == ScreenName::SelfTestRunning)
+  {
+    animStreamer->EnableKeepFaceAlive(true, 0);
+    _context->GetBackpackLightComponent()->SetSelfTestRunning(false);
+  }
+  
+  SetScreen(ScreenName::None);
 }
 
 } // namespace Vector

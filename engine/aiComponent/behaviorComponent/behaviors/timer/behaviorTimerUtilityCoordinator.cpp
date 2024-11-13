@@ -14,7 +14,6 @@
 
 #include "engine/aiComponent/behaviorComponent/behaviors/timer/behaviorTimerUtilityCoordinator.h"
 
-#include "clad/types/behaviorComponent/userIntent.h"
 #include "coretech/common/engine/jsonTools.h"
 #include "coretech/common/engine/utils/timer.h"
 
@@ -716,7 +715,7 @@ BehaviorProceduralClock::GetDigitsFunction BehaviorTimerUtilityCoordinator::Buil
         }else{
           tensDigit = minsRemaining/10;
         }
-        outMap.emplace(std::make_pair(Vision::SpriteBoxName::TensLeftOfColon, tensDigit));
+        outMap.emplace(std::make_pair(Vision::SpriteBoxName::SpriteBox_1, tensDigit));
       }
       
       // Ones Digit (left of colon)
@@ -728,7 +727,7 @@ BehaviorProceduralClock::GetDigitsFunction BehaviorTimerUtilityCoordinator::Buil
         }else{
           onesDigit = minsRemaining % 10;
         }
-        outMap.emplace(std::make_pair(Vision::SpriteBoxName::OnesLeftOfColon, onesDigit));
+        outMap.emplace(std::make_pair(Vision::SpriteBoxName::SpriteBox_2, onesDigit));
       }
 
       // Tens Digit (right of colon)
@@ -739,7 +738,7 @@ BehaviorProceduralClock::GetDigitsFunction BehaviorTimerUtilityCoordinator::Buil
         }else{
           tensDigit = secsRemaining/10;
         }
-        outMap.emplace(std::make_pair(Vision::SpriteBoxName::TensRightOfColon, tensDigit));
+        outMap.emplace(std::make_pair(Vision::SpriteBoxName::SpriteBox_4, tensDigit));
       }
 
       // Ones Digit (right of colon)
@@ -750,7 +749,7 @@ BehaviorProceduralClock::GetDigitsFunction BehaviorTimerUtilityCoordinator::Buil
         }else{
           onesDigit = secsRemaining % 10;
         }
-        outMap.emplace(std::make_pair(Vision::SpriteBoxName::OnesRightOfColon, onesDigit));
+        outMap.emplace(std::make_pair(Vision::SpriteBoxName::SpriteBox_5, onesDigit));
       }
 
       return outMap;

@@ -57,7 +57,7 @@
   },
   {
     "feature": "AttentionTransfer",
-    "enabled": true
+    "enabled": false
   },
   {
     "feature": "PopAWheelie",
@@ -72,8 +72,16 @@
     "enabled": true
   },
   {
+    "feature": "Alexa_UK",
+    "enabled": true // this must match kAlexaEnabledInUK
+  },
+  {
+    "feature": "Alexa_AU",
+    "enabled": true // this must match kAlexaEnabledInAU
+  },
+  {
     "feature": "HeldInPalm",
-    "enabled": false
+    "enabled": true
   },
   {
     "feature": "PRDemo",
@@ -101,6 +109,14 @@
   },
   {
     "feature": "HowOldAreYou",
+    "enabled": true
+  },
+  {
+    "feature": "StayOnChargerUntilCharged",
+    "enabled": true
+  },
+  {
+    "feature": "EyeColorVC",
     "enabled": true
   }
 ]
