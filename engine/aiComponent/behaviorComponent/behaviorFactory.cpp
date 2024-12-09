@@ -174,8 +174,10 @@
 #include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorReactToTouchPetting.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorReactToUnclaimedIntent.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorRobustChargerObservation.h"
+#include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorSnakeGame.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorTrackCube.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorTrackFace.h"
+#include "engine/aiComponent/behaviorComponent/behaviors/victor/behaviorWireTest.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/volume/behaviorVolume.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/weather/behaviorCoordinateWeather.h"
 #include "engine/aiComponent/behaviorComponent/behaviors/weather/behaviorDisplayWeather.h"
@@ -1189,6 +1191,12 @@ ICozmoBehaviorPtr BehaviorFactory::CreateBehavior(const Json::Value& config)
       break;
     }
     
+    case BehaviorClass::SnakeGame:
+    {
+      newBehavior = ICozmoBehaviorPtr(new BehaviorSnakeGame(config));
+      break;
+    }
+    
     case BehaviorClass::TrackCube:
     {
       newBehavior = ICozmoBehaviorPtr(new BehaviorTrackCube(config));
@@ -1198,6 +1206,12 @@ ICozmoBehaviorPtr BehaviorFactory::CreateBehavior(const Json::Value& config)
     case BehaviorClass::TrackFace:
     {
       newBehavior = ICozmoBehaviorPtr(new BehaviorTrackFace(config));
+      break;
+    }
+    
+    case BehaviorClass::WireTest:
+    {
+      newBehavior = ICozmoBehaviorPtr(new BehaviorWireTest(config));
       break;
     }
     
